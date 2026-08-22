@@ -17,6 +17,9 @@ class Settings:
     database_name: str = os.getenv("DATABASE_NAME", "incident_demo")
     database_user: str = os.getenv("DATABASE_USER", "incident_user")
     database_password: str = os.getenv("DATABASE_PASSWORD", "incident_password")
+    otel_enabled: bool = os.getenv("OTEL_SDK_DISABLED", "true").lower() != "true"
+    otel_endpoint: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    otel_service_name: str = os.getenv("OTEL_SERVICE_NAME", "incident-demo-api")
 
     @property
     def database_url(self) -> str:
@@ -27,4 +30,3 @@ class Settings:
 
 
 settings = Settings()
-

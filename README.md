@@ -74,3 +74,20 @@ Prometheus target status can be checked with:
 kubectl get servicemonitor -n incident-platform
 kubectl port-forward -n monitoring svc/incident-monitoring-kube-p-prometheus 9090:9090
 ```
+
+## Tracing
+
+Install OpenTelemetry Collector and Jaeger with:
+
+```bash
+./scripts/install-telemetry.sh
+```
+
+Open Jaeger with:
+
+```bash
+kubectl port-forward -n monitoring svc/incident-jaeger 16686:16686
+```
+
+Then visit <http://localhost:16686>, select `incident-demo-api`, and generate a frontend request. Database-backed requests should
+show a PostgreSQL child span.

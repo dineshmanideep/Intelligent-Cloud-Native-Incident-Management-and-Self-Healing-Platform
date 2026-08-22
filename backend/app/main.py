@@ -10,12 +10,10 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 
 from .config import settings
 from .db import check_database, get_demo_items
+from .telemetry import configure_logging, configure_telemetry
 
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+configure_logging()
 logger = logging.getLogger(settings.app_name)
 
 REQUEST_COUNT = Counter(
@@ -34,10 +32,12 @@ REQUEST_LATENCY = Histogram(
 async def lifespan(_: FastAPI):
     logger.info("starting service=%s environment=%s", settings.app_name, settings.app_env)
     yield
+    shutdown_telemetry()
     logger.info("stopping service=%s", settings.app_name)
 
 
 app = FastAPI(title="Incident Demo API", version="0.1.0", lifespan=lifespan)
+shutdown_telemetry = configure_telemetry(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -119,4 +119,3 @@ async def controlled_cpu(seconds: float = Query(default=10, ge=0, le=60)) -> dic
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics() -> PlainTextResponse:
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-

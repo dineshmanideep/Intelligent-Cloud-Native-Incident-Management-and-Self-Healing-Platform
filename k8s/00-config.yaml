@@ -11,6 +11,10 @@ data:
   DATABASE_PORT: "5432"
   DATABASE_NAME: incident_demo
   DATABASE_USER: incident_user
+  OTEL_SDK_DISABLED: "false"
+  OTEL_SERVICE_NAME: incident-demo-api
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://incident-otel-collector.monitoring.svc.cluster.local.:4317
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=kubernetes
 ---
 apiVersion: v1
 kind: Secret
@@ -21,4 +25,3 @@ type: Opaque
 stringData:
   DATABASE_PASSWORD: incident_password
   POSTGRES_PASSWORD: incident_password
-

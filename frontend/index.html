@@ -26,11 +26,23 @@
       const apiBase = configuredApi || (window.location.port === "3000" ? "http://localhost:8000" : "");
       const output = document.querySelector("#output");
 
+      function randomHex(bytes) {
+        const values = new Uint8Array(bytes);
+        crypto.getRandomValues(values);
+        return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
+      }
+
+      function traceparent() {
+        return `00-${randomHex(16)}-${randomHex(8)}-01`;
+      }
+
       for (const button of document.querySelectorAll("button")) {
         button.addEventListener("click", async () => {
           output.textContent = "Loading...";
           try {
-            const response = await fetch(apiBase + button.dataset.path);
+            const response = await fetch(apiBase + button.dataset.path, {
+              headers: { "traceparent": traceparent() }
+            });
             const body = await response.json();
             output.textContent = JSON.stringify({ status: response.status, body }, null, 2);
           } catch (error) {

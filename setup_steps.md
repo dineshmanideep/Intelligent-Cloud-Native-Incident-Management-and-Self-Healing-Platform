@@ -129,3 +129,84 @@
 
   The monitoring stack is based on the Prometheus Community Kubernetes stack. Official chart
   (https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
+
+
+  The issue was in the dashboard configuration, not Prometheus.
+
+  Prometheus had data and Grafana had the datasource, but the dashboard panels did not explicitly reference the Prometheus datasource. I fixed
+  all panels to use datasource UID prometheus.
+
+  Now:
+
+  1. Keep port-forward running:
+
+  kubectl port-forward -n monitoring svc/incident-monitoring-grafana 3000:80
+
+  2. Refresh Grafana with Ctrl+Shift+R.
+  3. Open:
+
+  Dashboards → Incident Platform Overview
+
+  4. Set the time range to:
+
+  Last 30 minutes
+
+  5. Click the dashboard refresh button.
+
+  Prometheus currently confirms:
+
+  - 2 API targets
+  - API request metrics
+  - CPU and memory metrics
+  - Kubernetes pod readiness metrics
+
+  The dashboard configuration has been updated and verified; every panel now references Prometheus.
+
+
+ Step 5 is implemented and verified.
+
+  Added:
+
+  - OpenTelemetry FastAPI instrumentation
+  - PostgreSQL tracing through Psycopg
+  - OTLP Collector in Kubernetes
+  - Jaeger all-in-one
+  - Trace-aware JSON logs
+  - Frontend traceparent propagation
+  - Telemetry installation script
+
+  Files added/updated:
+
+  - backend/app/telemetry.py
+  - k8s/06-otel.yaml
+  - scripts/install-telemetry.sh
+  - backend/requirements.txt
+
+  Verification passed:
+
+  - Backend tests: 4 passed
+  - Collector pod: Running
+  - Jaeger pod: Running
+  - API replicas: 2/2
+  - JSON logs contain trace_id and span_id
+  - Jaeger contains the database request trace:
+
+  GET /api/items
+  SELECT
+  GET /api/items http send
+
+  Open Jaeger:
+
+  kubectl port-forward -n monitoring svc/incident-jaeger 16686:16686
+
+  Then visit:
+
+  http://localhost:16686
+
+  Select service:
+
+  incident-demo-api
+
+  The implementation uses OpenTelemetry OTLP export and Python instrumentation.
+  OpenTelemetry Python documentation
+  (https://opentelemetry.io/docs/languages/python/instrumentation/)
