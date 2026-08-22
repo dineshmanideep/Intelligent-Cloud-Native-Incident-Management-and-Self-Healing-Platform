@@ -1,0 +1,30 @@
+grafana:
+  enabled: true
+  persistence:
+    enabled: false
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    retention: 2d
+    serviceMonitorSelector:
+      matchLabels:
+        release: incident-monitoring
+
+alertmanager:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true

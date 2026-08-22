@@ -230,3 +230,91 @@
   - PostgreSQL will use a single replica for the demo.
   - The API will use two replicas.
   - Monitoring with Prometheus and Grafana will be implemented after the application deployment is stable.
+
+
+ # Step 4 — Add Prometheus and Grafana Monitoring
+
+  ## Summary
+
+  Install the kube-prometheus-stack Helm chart, configure Prometheus to scrape the FastAPI metrics endpoint, and create a Grafana dashboard for
+  Kubernetes and application health. This stack provides Prometheus, Grafana, kube-state-metrics, node-exporter, dashboards, and alerting rules
+  through one maintained chart. kube-prometheus-stack documentation
+  (https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
+
+  ## Implementation Changes
+
+  ### Monitoring Installation
+
+  - Create a monitoring namespace.
+  - Add the Prometheus Community Helm repository.
+  - Install or upgrade kube-prometheus-stack using a committed values file.
+  - Keep monitoring resources separate from the application namespace.
+  - Configure Grafana persistence only if needed; use a small local-storage volume for Minikube.
+
+  ### API Scraping
+
+  - Label the incident-api Service as scrape-enabled.
+  - Add a ServiceMonitor targeting the API Service’s named HTTP port.
+  - Configure the scrape path as /metrics.
+  - Scrape both API replicas.
+  - Confirm Prometheus discovers both API endpoints and reports them as healthy.
+
+  The ServiceMonitor is the Kubernetes-native Prometheus Operator mechanism for selecting Services and defining their scrape endpoint.
+  ServiceMonitor reference (https://github.com/prometheus-community/helm-charts/blob/main/charts/kube-prometheus-stack/values.yaml)
+
+  ### Grafana Dashboard
+
+  Create a dashboard containing:
+
+  - Kubernetes node health
+  - Pod availability and restart count
+  - API replica availability
+  - API CPU usage
+  - API memory usage
+  - HTTP request rate
+  - HTTP 5xx error rate
+  - Request latency, including p95 latency
+  - PostgreSQL pod health
+  - Prometheus target health
+
+  Provision the dashboard through Kubernetes configuration so it is recreated automatically when the monitoring stack is installed.
+
+  ### Access and Credentials
+
+  - Add a script such as scripts/install-monitoring.sh.
+  - The script will install or upgrade the Helm release idempotently.
+  - Grafana access will use a Kubernetes Secret.
+  - The Grafana password will come from GRAFANA_ADMIN_PASSWORD; if it is not provided, the script will generate a local password and print it
+    once.
+
+  - Prometheus and Grafana will be accessed through port-forwarding to avoid adding unnecessary public NodePorts.
+
+  ## Verification
+
+  The implementation is complete when:
+
+  - Prometheus and Grafana pods are running in monitoring.
+  - kubectl get servicemonitor -A shows the API monitor.
+  - Prometheus’s target page shows both API replicas as UP.
+  - The Grafana dashboard loads successfully.
+  - Normal frontend requests increase the request-rate panel.
+  - /api/error increases the 5xx error panel.
+  - /api/delay increases the latency panel.
+  - /api/cpu increases API CPU usage.
+  - Deleting one API pod temporarily reduces capacity and Kubernetes recreates it.
+  - The replacement API pod is scraped again after becoming ready.
+
+  ## Planned Files
+
+  - monitoring/values.yaml — Helm configuration
+  - monitoring/dashboard.json — Grafana dashboard definition
+  - k8s/04-api-monitoring.yaml — ServiceMonitor and monitoring labels
+  - scripts/install-monitoring.sh — repository setup, Helm installation, and verification
+  - README.md — monitoring access and verification commands
+
+  ## Assumptions
+
+  - Prometheus and Grafana will be installed using kube-prometheus-stack.
+  - The API will continue exposing metrics through /metrics.
+  - The dashboard will use PromQL queries over the existing request and latency metrics plus Kubernetes-exported metrics.
+  - Monitoring will be installed after the application deployment and will not change the current application behavior.

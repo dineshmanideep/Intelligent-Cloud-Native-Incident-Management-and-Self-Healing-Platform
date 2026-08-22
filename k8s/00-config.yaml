@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-api-config
+  namespace: incident-platform
+data:
+  APP_NAME: incident-demo-api
+  APP_ENV: kubernetes
+  LOG_LEVEL: INFO
+  DATABASE_HOST: incident-postgres
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: incident_demo
+  DATABASE_USER: incident_user
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: incident-db-secret
+  namespace: incident-platform
+type: Opaque
+stringData:
+  DATABASE_PASSWORD: incident_password
+  POSTGRES_PASSWORD: incident_password
+

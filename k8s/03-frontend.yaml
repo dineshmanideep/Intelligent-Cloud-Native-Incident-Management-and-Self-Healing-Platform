@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-frontend
+  namespace: incident-platform
+  labels:
+    app: incident-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-frontend
+  template:
+    metadata:
+      labels:
+        app: incident-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: incident-demo-frontend:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-frontend
+  namespace: incident-platform
+spec:
+  type: NodePort
+  selector:
+    app: incident-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
+

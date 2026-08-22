@@ -22,7 +22,8 @@
     <button data-path="/api/cpu?seconds=10">10-second CPU load</button>
     <pre id="output">Choose an action.</pre>
     <script>
-      const apiBase = new URLSearchParams(window.location.search).get("api") || "http://localhost:8000";
+      const configuredApi = new URLSearchParams(window.location.search).get("api");
+      const apiBase = configuredApi || (window.location.port === "3000" ? "http://localhost:8000" : "");
       const output = document.querySelector("#output");
 
       for (const button of document.querySelectorAll("button")) {
@@ -40,4 +41,3 @@
     </script>
   </body>
 </html>
-

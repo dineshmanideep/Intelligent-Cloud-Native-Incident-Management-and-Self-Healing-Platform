@@ -33,7 +33,7 @@
 
 
 
-  ## web app steps
+  ## web app steps( in local environment)
 
 
 
@@ -50,3 +50,82 @@
   - Frontend: http://localhost:3000
   - API docs: http://localhost:8000/docs
   - Metrics: http://localhost:8000/metrics
+
+
+## Run kuberneties setup
+ Implemented:
+
+  - Backend and frontend Dockerfiles
+  - Nginx reverse proxy for frontend-to-API communication
+  - Kubernetes Deployments and Services
+  - PostgreSQL PersistentVolumeClaim
+  - ConfigMap and Secret
+  - API deployment with 2 replicas
+  - Minikube build/deploy script
+  - Kubernetes deployment documentation
+
+  Run future deployments with:
+
+  ./scripts/deploy-kubernetes.sh
+
+  Verified successfully:
+
+  - Frontend: 200
+  - API health: 200
+  - Database check: 200
+  - Database query: 200
+  - Controlled error: 500
+  - PostgreSQL PVC: Bound
+  - API replicas: 2/2
+  - Deleting an API pod caused Kubernetes to recreate it successfully
+
+  Frontend URL:
+
+  http://192.168.49.2:30080
+
+  The next project step is Step 4: install Prometheus and Grafana and connect the API metrics to a monitoring dashboard.
+ 
+
+ ## run monitoring setup
+ • Step 4 is complete.
+
+  Implemented:
+
+  - Prometheus and Grafana via kube-prometheus-stack
+  - API ServiceMonitor
+  - Grafana dashboard with request rate, 5xx errors, latency, CPU, memory, pod readiness, and target health
+  - Idempotent monitoring installer
+  - OCI chart download fallback for reliable installation
+
+  Files added/updated:
+
+  - monitoring/values.yaml
+  - k8s/04-api-monitoring.yaml
+  - k8s/05-grafana-dashboard.yaml
+  - scripts/install-monitoring.sh
+
+  Verification passed:
+
+  - Helm release status: deployed
+  - All Prometheus/Grafana pods: Running
+  - Prometheus reports 2 API targets
+  - Request metrics are available
+  - Grafana dashboard exists: Incident Platform Overview
+
+  Access Grafana:
+
+  kubectl port-forward -n monitoring svc/incident-monitoring-grafana 3000:80
+
+  Open http://localhost:3000.
+
+  Retrieve the Grafana password:
+
+  kubectl get secret grafana-admin -n monitoring \
+    -o jsonpath='{.data.admin-password}' | base64 -d
+
+  Prometheus:
+
+  kubectl port-forward -n monitoring svc/incident-monitoring-kube-p-prometheus 9090:9090
+
+  The monitoring stack is based on the Prometheus Community Kubernetes stack. Official chart
+  (https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)

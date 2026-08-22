@@ -34,3 +34,43 @@ Stop the local database with:
 docker compose down
 ```
 
+## Kubernetes deployment
+
+With Minikube running, deploy the application into the project namespace:
+
+```bash
+./scripts/deploy-kubernetes.sh
+```
+
+Open the printed frontend URL. The Nginx frontend proxies `/health` and `/api/*` to the internal FastAPI service.
+
+Useful Kubernetes checks:
+
+```bash
+kubectl get pods,svc,pvc -n incident-platform
+kubectl logs deployment/incident-api -n incident-platform
+kubectl port-forward -n incident-platform service/incident-api 8000:8000
+```
+
+## Monitoring
+
+Install Prometheus and Grafana with:
+
+```bash
+./scripts/install-monitoring.sh
+```
+
+Then open Grafana through a port-forward:
+
+```bash
+kubectl port-forward -n monitoring svc/incident-monitoring-grafana 3000:80
+```
+
+Open <http://localhost:3000>, sign in as `admin`, and use the generated password printed by the install script.
+
+Prometheus target status can be checked with:
+
+```bash
+kubectl get servicemonitor -n incident-platform
+kubectl port-forward -n monitoring svc/incident-monitoring-kube-p-prometheus 9090:9090
+```
