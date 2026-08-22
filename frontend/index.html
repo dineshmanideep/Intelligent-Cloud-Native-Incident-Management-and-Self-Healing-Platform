@@ -21,10 +21,14 @@
     <button data-path="/api/delay?seconds=5">5-second delay</button>
     <button data-path="/api/cpu?seconds=10">10-second CPU load</button>
     <pre id="output">Choose an action.</pre>
+    <h2>Detected incidents</h2>
+    <button id="refresh-incidents">Refresh incidents</button>
+    <pre id="incidents-output">No incidents loaded.</pre>
     <script>
       const configuredApi = new URLSearchParams(window.location.search).get("api");
       const apiBase = configuredApi || (window.location.port === "3000" ? "http://localhost:8000" : "");
       const output = document.querySelector("#output");
+      const incidentsOutput = document.querySelector("#incidents-output");
 
       function randomHex(bytes) {
         const values = new Uint8Array(bytes);
@@ -37,6 +41,7 @@
       }
 
       for (const button of document.querySelectorAll("button")) {
+        if (button.id === "refresh-incidents") continue;
         button.addEventListener("click", async () => {
           output.textContent = "Loading...";
           try {
@@ -50,6 +55,19 @@
           }
         });
       }
+
+      async function refreshIncidents() {
+        incidentsOutput.textContent = "Loading incidents...";
+        try {
+          const response = await fetch("/incidents/api/incidents");
+          const body = await response.json();
+          incidentsOutput.textContent = JSON.stringify(body, null, 2);
+        } catch (error) {
+          incidentsOutput.textContent = `Incident service unavailable: ${error}`;
+        }
+      }
+
+      document.querySelector("#refresh-incidents").addEventListener("click", refreshIncidents);
     </script>
   </body>
 </html>

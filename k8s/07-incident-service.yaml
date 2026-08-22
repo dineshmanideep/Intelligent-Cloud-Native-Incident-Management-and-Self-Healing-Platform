@@ -1,0 +1,206 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: incident-memory-data
+  namespace: incident-platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-service-config
+  namespace: incident-platform
+data:
+  INCIDENT_DB_HOST: incident-memory-postgres
+  INCIDENT_DB_PORT: "5432"
+  INCIDENT_DB_NAME: incident_memory
+  INCIDENT_DB_USER: incident_user
+  PROMETHEUS_URL: http://incident-monitoring-kube-p-prometheus.monitoring.svc.cluster.local.:9090
+  JAEGER_URL: http://incident-jaeger.monitoring.svc.cluster.local.:16686
+  INCIDENT_API_URL: http://incident-api.incident-platform.svc.cluster.local.:8000
+  DETECTION_INTERVAL_SECONDS: "15"
+  LLM_API_BASE_URL: ""
+  LLM_MODEL: ""
+  EMBEDDING_API_BASE_URL: ""
+  EMBEDDING_MODEL: ""
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: incident-memory-secret
+  namespace: incident-platform
+type: Opaque
+stringData:
+  INCIDENT_DB_PASSWORD: incident_password
+  LLM_API_KEY: ""
+  EMBEDDING_API_KEY: ""
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: incident-service
+  namespace: incident-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: incident-service-reader
+  namespace: incident-platform
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: incident-service-reader
+  namespace: incident-platform
+subjects:
+  - kind: ServiceAccount
+    name: incident-service
+    namespace: incident-platform
+roleRef:
+  kind: Role
+  name: incident-service-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-memory-postgres
+  namespace: incident-platform
+  labels:
+    app: incident-memory-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-memory-postgres
+  template:
+    metadata:
+      labels:
+        app: incident-memory-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: incident-service-config
+                  key: INCIDENT_DB_NAME
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: incident-service-config
+                  key: INCIDENT_DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: incident-memory-secret
+                  key: INCIDENT_DB_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: incident-memory-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-memory-postgres
+  namespace: incident-platform
+spec:
+  selector:
+    app: incident-memory-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-service
+  namespace: incident-platform
+  labels:
+    app: incident-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-service
+  template:
+    metadata:
+      labels:
+        app: incident-service
+    spec:
+      serviceAccountName: incident-service
+      containers:
+        - name: incident-service
+          image: incident-service:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: incident-service-config
+            - secretRef:
+                name: incident-memory-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-service
+  namespace: incident-platform
+spec:
+  selector:
+    app: incident-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+

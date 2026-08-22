@@ -14,21 +14,26 @@ fi
 echo "Building images inside Minikube..."
 minikube image build -t incident-demo-api:local -f backend/Dockerfile .
 minikube image build -t incident-demo-frontend:local frontend/
+minikube image build -t incident-service:local -f incident_service/Dockerfile .
 
 echo "Ensuring namespace exists..."
 kubectl create namespace "$namespace" --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Applying Kubernetes resources..."
-kubectl apply -f k8s/ -n "$namespace"
+kubectl apply -f k8s/
+
+# Recreate pods so rebuilt local images and configuration are used on every deploy.
+kubectl rollout restart deployment/incident-api deployment/incident-frontend deployment/incident-service -n "$namespace"
 
 echo "Waiting for deployments..."
 kubectl rollout status deployment/incident-postgres -n "$namespace" --timeout=180s
 kubectl rollout status deployment/incident-api -n "$namespace" --timeout=180s
 kubectl rollout status deployment/incident-frontend -n "$namespace" --timeout=180s
+kubectl rollout status deployment/incident-memory-postgres -n "$namespace" --timeout=180s
+kubectl rollout status deployment/incident-service -n "$namespace" --timeout=180s
 
 echo
 kubectl get pods,svc,pvc -n "$namespace"
 echo
 echo "Frontend URL: $(minikube service incident-frontend -n "$namespace" --url)"
 echo "API port-forward: kubectl port-forward -n $namespace service/incident-api 8000:8000"
-

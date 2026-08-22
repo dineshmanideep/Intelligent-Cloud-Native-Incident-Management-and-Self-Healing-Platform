@@ -91,3 +91,27 @@ kubectl port-forward -n monitoring svc/incident-jaeger 16686:16686
 
 Then visit <http://localhost:16686>, select `incident-demo-api`, and generate a frontend request. Database-backed requests should
 show a PostgreSQL child span.
+
+## Incident management
+
+Deploy the Phase 1 incident service and pgvector memory with the application deployment:
+
+```bash
+./scripts/deploy-kubernetes.sh
+```
+
+The incident API is available through the frontend proxy at:
+
+```bash
+curl http://$(minikube ip):30080/incidents/api/incidents
+```
+
+Generate an incident, wait for the detector cycle, and request a diagnosis:
+
+```bash
+curl "http://$(minikube ip):30080/api/cpu?seconds=20"
+curl http://$(minikube ip):30080/incidents/api/incidents
+```
+
+The default diagnosis is a safe local fallback. Configure `LLM_API_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in the incident
+service Secret/ConfigMap to enable an OpenAI-compatible diagnosis provider. Kubernetes recovery is intentionally manual in Phase 1.
