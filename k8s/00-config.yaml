@@ -11,6 +11,9 @@ data:
   DATABASE_PORT: "5432"
   DATABASE_NAME: incident_demo
   DATABASE_USER: incident_user
+  DATABASE_POOL_MIN_SIZE: "1"
+  DATABASE_POOL_MAX_SIZE: "8"
+  DATABASE_POOL_TIMEOUT: "2"
   OTEL_SDK_DISABLED: "false"
   OTEL_SERVICE_NAME: incident-demo-api
   OTEL_EXPORTER_OTLP_ENDPOINT: http://incident-otel-collector.monitoring.svc.cluster.local.:4317

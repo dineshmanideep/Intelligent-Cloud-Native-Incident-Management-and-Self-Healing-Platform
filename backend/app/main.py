@@ -6,10 +6,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 from .config import settings
-from .db import check_database, get_demo_items
+from .db import (
+    check_database,
+    close_pool,
+    exhaust_pool,
+    get_demo_items,
+    open_pool,
+    reset_demo_state,
+    start_lock_contention,
+)
 from .telemetry import configure_logging, configure_telemetry
 
 
@@ -26,12 +34,17 @@ REQUEST_LATENCY = Histogram(
     "HTTP request duration in seconds",
     ["method", "path"],
 )
+DEMO_DEPENDENCY_RETRIES = Counter("demo_dependency_retries_total", "Retries performed by the dependency demo")
+DEMO_DEPENDENCY_FAILURE = Gauge("demo_dependency_failure_active", "Whether the dependency failure demo is active")
+_dependency_failure_active = False
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("starting service=%s environment=%s", settings.app_name, settings.app_env)
+    open_pool()
     yield
+    close_pool()
     shutdown_telemetry()
     logger.info("stopping service=%s", settings.app_name)
 
@@ -84,6 +97,56 @@ async def database_check() -> dict[str, object]:
     if not healthy:
         raise HTTPException(status_code=503, detail="Database is unavailable")
     return {"database": "ok"}
+
+
+@app.post("/api/demo/db-pool-exhaust")
+async def demo_db_pool_exhaust() -> dict[str, object]:
+    try:
+        state = await asyncio.to_thread(exhaust_pool)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"Unable to hold database pool connections: {error}") from error
+    logger.warning("demo scenario=database_connection_pool_exhaustion state=%s", state)
+    return {"scenario": "database_connection_pool_exhaustion", **state}
+
+
+@app.post("/api/demo/db-lock/start")
+async def demo_db_lock_start() -> dict[str, str]:
+    try:
+        state = await asyncio.to_thread(start_lock_contention)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"Unable to start database lock scenario: {error}") from error
+    logger.warning("demo scenario=database_lock_contention state=active")
+    return state
+
+
+@app.post("/api/demo/reset")
+async def demo_reset() -> dict[str, str]:
+    global _dependency_failure_active
+    _dependency_failure_active = False
+    DEMO_DEPENDENCY_FAILURE.set(0)
+    await asyncio.to_thread(reset_demo_state)
+    logger.info("demo scenarios reset")
+    return {"status": "reset"}
+
+
+@app.post("/api/demo/dependency-failure")
+async def demo_dependency_failure() -> dict[str, str]:
+    global _dependency_failure_active
+    _dependency_failure_active = True
+    DEMO_DEPENDENCY_FAILURE.set(1)
+    logger.warning("demo scenario=downstream_dependency_retry_storm state=active")
+    return {"scenario": "downstream_dependency_retry_storm", "status": "active"}
+
+
+@app.get("/api/demo/downstream")
+async def demo_downstream() -> dict[str, str]:
+    if _dependency_failure_active:
+        for attempt in range(3):
+            DEMO_DEPENDENCY_RETRIES.inc()
+            logger.warning("demo downstream timeout retry=%s", attempt + 1)
+            await asyncio.sleep(0.25)
+        raise HTTPException(status_code=504, detail="Controlled downstream timeout")
+    return {"dependency": "ok"}
 
 
 @app.get("/api/items")

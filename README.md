@@ -113,5 +113,20 @@ curl "http://$(minikube ip):30080/api/cpu?seconds=20"
 curl http://$(minikube ip):30080/incidents/api/incidents
 ```
 
-The default diagnosis is a safe local fallback. Configure `LLM_API_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in the incident
-service Secret/ConfigMap to enable an OpenAI-compatible diagnosis provider. Kubernetes recovery is intentionally manual in Phase 1.
+The frontend also provides controlled scenarios for database pool exhaustion, database lock contention, and downstream retry
+storms. Use the **Cause** buttons, wait for the incident card to appear, click **Diagnose with telemetry + memory**, and then
+click **Resolve incident**. The next run retrieves the resolved incident and its solution from pgvector.
+
+The same scenarios are available from the API:
+
+```bash
+curl -X POST http://$(minikube ip):30080/api/demo/db-pool-exhaust
+curl -X POST http://$(minikube ip):30080/api/demo/db-lock/start
+curl -X POST http://$(minikube ip):30080/api/demo/dependency-failure
+curl -X POST http://$(minikube ip):30080/api/demo/reset
+```
+
+Diagnosis collects a five-minute Prometheus range, recent API logs, pod status, and a Jaeger trace reference. The default
+diagnosis is a safe local fallback; the LLM is called only when the Diagnose action is requested. Configure
+`LLM_API_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in the incident service Secret/ConfigMap to enable an OpenAI-compatible
+diagnosis provider. Kubernetes recovery is intentionally manual; the demo reset endpoints only release controlled resources.

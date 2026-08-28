@@ -461,3 +461,445 @@ Phase 1 is complete and deployed successfully.
 
   The current implementation is a strong Phase 1 MVP. The main limitation is that the default demo uses deterministic local diagnosis. To
   demonstrate full RAG generation, configure an OpenAI-compatible LLM provider in the incident-service Kubernetes Secret.
+
+
+
+-------------
+
+# After the implimentation of the diagnose and resolve
+
+
+• ## 1. Start the project
+
+  Open a terminal:
+
+  cd /home/dinesh/Desktop/course_projects/cc_project
+  source .venv/bin/activate
+
+  Start Minikube:
+
+  minikube start --driver=docker
+
+  Deploy the application:
+
+  ./scripts/deploy-kubernetes.sh
+
+  If monitoring or Jaeger are not already installed:
+
+  ./scripts/install-monitoring.sh
+  ./scripts/install-telemetry.sh
+
+  Check everything:
+
+  kubectl get pods -n incident-platform
+  kubectl get pods -n monitoring
+
+  All important pods should show Running and Ready.
+
+  ## 2. Open the project
+
+  Find the frontend URL:
+
+  minikube service incident-frontend -n incident-platform --url
+
+  Open the printed URL, usually:
+
+  http://192.168.49.2:30080
+
+  Use this URL for the application demo.
+
+  Do not use localhost:3000 unless you specifically want Grafana.
+
+  ## 3. Open Grafana and Jaeger
+
+  Run Grafana in a separate terminal:
+
+  kubectl port-forward -n monitoring svc/incident-monitoring-grafana 3000:80
+
+  Open:
+
+  http://localhost:3000
+
+  Run Jaeger in another terminal:
+
+  kubectl port-forward -n monitoring svc/incident-jaeger 16686:16686
+
+  Open:
+
+  http://localhost:16686
+
+  Stop port-forwards with:
+
+  Ctrl+C
+
+  ## 4. Recommended demo scenario
+
+  The best first demo is database connection pool exhaustion.
+
+  ### Step 1: Reset the system
+
+  From a terminal:
+
+  node_ip="$(minikube ip)"
+  base="http://${node_ip}:30080"
+
+  curl -X POST "$base/api/demo/reset"
+
+  Or click:
+
+  Fix/reset demo scenarios
+
+  on the frontend.
+
+  ### Step 2: Cause the problem
+
+  Click:
+
+  Cause DB pool exhaustion
+
+  or run:
+
+  curl -X POST "$base/api/demo/db-pool-exhaust"
+
+  The API deliberately holds all available database-pool connections.
+
+  Expected behavior:
+
+  - Database-backed requests begin failing
+  - /api/items may return HTTP 503
+  - Database latency increases
+  - CPU remains relatively normal
+  - Prometheus records pool occupancy
+  - Logs record the scenario
+  - Jaeger records affected requests
+
+  Test the affected endpoint:
+
+  curl --max-time 5 "$base/api/items"
+
+  ### Step 3: Wait for detection
+
+  Wait approximately:
+
+  sleep 30
+
+  The detector runs every 15 seconds, and Prometheus needs time to scrape the metrics.
+
+  The frontend refreshes automatically every 15 seconds. You can also click:
+
+  Refresh incidents
+
+  The incident should show:
+
+  - Database pool exhaustion title
+  - High severity
+  - Active status
+  - Scenario name
+  - Observation count
+  - First-seen and last-seen times
+  - Trace reference
+
+  ## 5. Diagnose the incident
+
+  On the incident card, click:
+
+  Diagnose with telemetry + memory
+
+  The system then collects:
+
+  - Five-minute Prometheus metric history
+  - Metric values and thresholds
+  - Metric trends
+  - Kubernetes pod status
+  - Recent API logs
+  - Jaeger trace reference
+  - Previously resolved similar incidents from pgvector
+
+  The LLM is called only at this point, if configured.
+
+  Without an LLM key, the system displays a deterministic local diagnosis such as:
+
+  Probable root cause:
+  Database connection pool exhaustion
+
+  Recommended action:
+  Release blocked connections, increase the pool size, and restart the API service.
+
+  You can also diagnose through the API:
+
+  curl -X POST \
+    "$base/incidents/api/incidents/INCIDENT_ID/diagnose"
+
+  Replace INCIDENT_ID with the actual incident ID.
+
+  ## 6. Resolve the incident
+
+  After diagnosis, click:
+
+  Resolve incident
+
+  Enter:
+
+  Title:
+  Database connection pool exhaustion
+
+  Example solution:
+
+  Released blocked connections, increased the pool size, and restarted the API service.
+
+  The system then:
+
+  - Saves the final title
+  - Saves the diagnosis
+  - Saves metrics, logs, traces, and pod evidence
+  - Saves the resolution solution
+  - Marks the incident as resolved
+  - Makes it available as future RAG memory
+
+  You can also resolve through the API:
+
+  curl -X POST \
+    "$base/incidents/api/incidents/INCIDENT_ID/resolve" \
+    -H 'content-type: application/json' \
+    -d '{
+      "title": "Database connection pool exhaustion",
+      "outcome": "Released blocked connections, increased the pool size, and restarted the API service."
+    }'
+
+  ## 7. Fix the controlled problem
+
+  Click:
+
+  Fix/reset demo scenarios
+
+  or run:
+
+  curl -X POST "$base/api/demo/reset"
+
+  Verify recovery:
+
+  curl "$base/api/items"
+
+  It should return the demo records successfully.
+
+  ## 8. Demonstrate RAG memory
+
+  Run the same scenario again:
+
+  curl -X POST "$base/api/demo/db-pool-exhaust"
+  sleep 30
+
+  Then diagnose the new active incident.
+
+  This time, the diagnosis should include the previous resolved incident and its solution:
+
+  Similar incident:
+  Database connection pool exhaustion
+
+  Previous solution:
+  Released blocked connections, increased the pool size, and restarted the API service.
+
+  This demonstrates:
+
+  First occurrence:
+  Detect → diagnose → resolve → save memory
+
+  Second occurrence:
+  Detect → diagnose → retrieve previous incident → show previous solution
+
+  ## 9. Other available scenarios
+
+  ### Database lock contention
+
+  Frontend:
+
+  Cause DB lock contention
+
+  API:
+  curl -X POST "$base/api/demo/db-lock/start"
+
+  Expected behavior:
+
+  - Database-backed requests become slow
+  - CPU remains relatively normal
+  - Jaeger shows slow database-related traces
+  - Diagnosis suggests database lock contention
+
+  ### Dependency retry storm
+
+  Frontend:
+
+  Cause dependency retry storm
+
+  API:
+
+  curl -X POST "$base/api/demo/dependency-failure"
+
+  Generate requests:
+
+  for i in $(seq 1 10); do
+    curl --max-time 5 -sS -o /dev/null \
+      "$base/api/demo/downstream" || true
+  done
+
+  Expected behavior:
+
+  - Requests retry the dependency
+  - Retry metrics increase
+  - Logs show retry attempts
+  - Requests eventually return HTTP 504
+  - Diagnosis identifies downstream timeout/retry behavior
+
+  ## 10. What to show in Grafana and Jaeger
+
+  In Grafana, show:
+
+  - Request count
+  - Error rate
+  - Request latency
+  - CPU usage
+  - Database-related scenario metrics
+  - Retry metrics
+
+  In Jaeger:
+
+  1. Select service:
+
+  incident-demo-api
+
+  2. Generate an API request.
+  3. Open the resulting trace.
+  4. Show the FastAPI span and PostgreSQL child span.
+  5. Use the trace ID shown on the incident card.
+
+  ## 11. Stop the project
+
+  Stop port-forward terminals with:
+
+  Ctrl+C
+
+  Stop Minikube while preserving data:
+
+  minikube stop
+
+  Start again later:
+
+  minikube start --driver=docker
+  ./scripts/deploy-kubernetes.sh
+
+  Do not use:
+
+  minikube delete
+
+  unless you intentionally want to delete the cluster and possibly lose persistent demo data.
+
+  
+  The complete handoff is documented in CODEX_HANDOFF.md.
+
+
+# when the minikube already running with all the services to stop and restart
+
+ There are three different things running:
+
+  1. Minikube cluster
+  2. Your application deployments
+  3. Monitoring tools and port-forwards
+
+  ### Stop everything temporarily
+
+  Stop port-forwards with:
+
+  Ctrl+C
+
+  Then stop Minikube:
+
+  minikube stop
+
+  This stops the entire Kubernetes cluster but preserves deployments, databases, and persistent volumes.
+
+  ### Restart after minikube stop
+
+  minikube start --driver=docker
+
+  Then redeploy/restart the project:
+
+  cd /home/dinesh/Desktop/course_projects/cc_project
+  ./scripts/deploy-kubernetes.sh
+
+  You normally do not need to run the monitoring or telemetry installation scripts again because those resources are preserved.
+
+  ### Check what is running
+
+  Application:
+
+  kubectl get pods -n incident-platform
+
+  Monitoring:
+
+  kubectl get pods -n monitoring
+
+  ### Difference between scripts
+
+  deploy-kubernetes.sh:
+
+  - Builds the API, frontend, and incident-service images
+  - Applies application manifests
+  - Restarts application deployments
+  - Does not install Prometheus or Jaeger from scratch
+
+  install-monitoring.sh:
+
+  - Installs or updates Prometheus and Grafana
+  - Run it only for first-time setup or monitoring changes
+
+  install-telemetry.sh:
+
+  - Installs or updates OpenTelemetry Collector and Jaeger
+  - Run it only for first-time setup or telemetry changes
+
+  These installation scripts are generally repeatable, but they are not required every time you restart Minikube.
+
+  ### Restart only the application
+
+  If Minikube is already running and you only want to restart the app:
+
+  kubectl rollout restart deployment/incident-api \
+    deployment/incident-frontend \
+    deployment/incident-service \
+    -n incident-platform
+
+  Or simply run:
+
+  ./scripts/deploy-kubernetes.sh
+
+  ### Restart only monitoring
+
+  kubectl rollout restart deployment \
+    -n monitoring \
+    -l app.kubernetes.io/instance=incident-monitoring
+
+  Usually this is unnecessary.
+
+  ### Start the browser access again
+
+  Frontend:
+
+  minikube service incident-frontend -n incident-platform --url
+
+  Grafana:
+
+  kubectl port-forward -n monitoring svc/incident-monitoring-grafana 3000:80
+
+  Jaeger:
+
+  kubectl port-forward -n monitoring svc/incident-jaeger 16686:16686
+
+  The simplest daily workflow is:
+
+  minikube start --driver=docker
+  cd /home/dinesh/Desktop/course_projects/cc_project
+  ./scripts/deploy-kubernetes.sh
+  minikube service incident-frontend -n incident-platform --url
+
+  Only run the monitoring and telemetry installation scripts again if those services are missing or their configuration has changed.
+ 

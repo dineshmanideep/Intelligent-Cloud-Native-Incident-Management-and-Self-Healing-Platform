@@ -62,6 +62,7 @@ metadata:
 spec:
   selector:
     app: incident-api
+  sessionAffinity: ClientIP
   ports:
     - name: http
       port: 8000

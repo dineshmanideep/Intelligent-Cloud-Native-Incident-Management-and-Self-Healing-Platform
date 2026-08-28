@@ -17,6 +17,9 @@ class Settings:
     database_name: str = os.getenv("DATABASE_NAME", "incident_demo")
     database_user: str = os.getenv("DATABASE_USER", "incident_user")
     database_password: str = os.getenv("DATABASE_PASSWORD", "incident_password")
+    database_pool_min_size: int = int(os.getenv("DATABASE_POOL_MIN_SIZE", "1"))
+    database_pool_max_size: int = int(os.getenv("DATABASE_POOL_MAX_SIZE", "8"))
+    database_pool_timeout: float = float(os.getenv("DATABASE_POOL_TIMEOUT", "2"))
     otel_enabled: bool = os.getenv("OTEL_SDK_DISABLED", "true").lower() != "true"
     otel_endpoint: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     otel_service_name: str = os.getenv("OTEL_SERVICE_NAME", "incident-demo-api")

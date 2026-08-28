@@ -7,7 +7,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS incidents (
     resolution_outcome TEXT,
     embedding vector(64) NOT NULL
 );
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS scenario TEXT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS observation_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS diagnosis_window JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE UNIQUE INDEX IF NOT EXISTS active_incident_fingerprint
     ON incidents (fingerprint) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS incidents_embedding_idx
@@ -102,11 +106,35 @@ RULES = (
     ),
     Rule(
         "error_rate",
-        'sum(rate(http_requests_total{namespace="incident-platform",service="incident-api",status=~"5.."}[2m]))',
+        'sum(rate(http_requests_total{namespace="incident-platform",service="incident-api",status=~"5.."}[2m])) / clamp_min(sum(rate(http_requests_total{namespace="incident-platform",service="incident-api"}[2m])), 0.001)',
         0.05,
         ">",
         "high",
-        "API HTTP 5xx rate is above the demo threshold",
+        "API HTTP 5xx percentage is above the five percent threshold",
+    ),
+    Rule(
+        "db_pool_exhaustion",
+        'max(demo_db_held_connections{namespace="incident-platform",service="incident-api"} / clamp_min(demo_db_pool_capacity{namespace="incident-platform",service="incident-api"}, 1))',
+        0.90,
+        ">",
+        "high",
+        "Database connection pool is at least 90 percent occupied",
+    ),
+    Rule(
+        "db_lock_contention",
+        'max(demo_db_lock_contention_active{namespace="incident-platform",service="incident-api"})',
+        0.5,
+        ">",
+        "high",
+        "Database lock contention mode is active",
+    ),
+    Rule(
+        "dependency_retry_storm",
+        'sum(rate(demo_dependency_retries_total{namespace="incident-platform",service="incident-api"}[2m]))',
+        0.10,
+        ">",
+        "high",
+        "Downstream dependency retries are above the demo threshold",
     ),
     Rule(
         "api_target_down",
@@ -200,6 +228,19 @@ async def prometheus_query(query: str) -> tuple[float | None, dict[str, Any]]:
         return None, {"error": str(error), "query": query}
 
 
+async def prometheus_range(query: str, start: datetime, end: datetime) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            response = await http.get(
+                f"{PROMETHEUS_URL.rstrip('/')}/api/v1/query_range",
+                params={"query": query, "start": start.timestamp(), "end": end.timestamp(), "step": 15},
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as error:
+        return {"error": str(error), "query": query}
+
+
 async def trace_reference() -> str | None:
     try:
         async with httpx.AsyncClient(timeout=5) as http:
@@ -228,6 +269,43 @@ async def pod_evidence() -> list[dict[str, Any]]:
         return [{"error": str(error)}]
 
 
+async def log_evidence(since_seconds: int = 300) -> list[str]:
+    if client is None or kube_config is None:
+        return []
+    try:
+        try:
+            kube_config.load_incluster_config()
+        except Exception:
+            kube_config.load_kube_config()
+        pods = client.CoreV1Api().list_namespaced_pod("incident-platform", label_selector="app=incident-api").items
+        lines: list[str] = []
+        for pod in pods:
+            text = client.CoreV1Api().read_namespaced_pod_log(
+                pod.metadata.name, "incident-platform", since_seconds=since_seconds, tail_lines=80
+            )
+            lines.extend(text.splitlines()[-80:])
+        return lines[-200:]
+    except Exception as error:
+        return [f"log collection error={error}"]
+
+
+async def diagnosis_telemetry(incident: dict[str, Any]) -> dict[str, Any]:
+    end = now()
+    start = end.replace(microsecond=0)
+    start = start - timedelta(minutes=5)
+    queries = {rule.name: rule.query for rule in RULES}
+    ranges = {name: await prometheus_range(query, start, end) for name, query in queries.items()}
+    return {
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+        "metrics": ranges,
+        "pods": await pod_evidence(),
+        "logs": await log_evidence(),
+        "trace_reference": await trace_reference(),
+        "candidate_started": incident["first_seen"].isoformat() if isinstance(incident.get("first_seen"), datetime) else str(incident.get("first_seen")),
+    }
+
+
 async def db_failure() -> tuple[bool, str]:
     try:
         async with httpx.AsyncClient(timeout=5) as http:
@@ -251,15 +329,15 @@ async def create_or_update(rule: Rule, value: float, raw: dict[str, Any], pods: 
             existing = cursor.fetchone()
             if existing:
                 cursor.execute(
-                    "UPDATE incidents SET last_seen=now(), evidence=%s, trace_reference=COALESCE(%s, trace_reference) WHERE id=%s",
+                    "UPDATE incidents SET last_seen=now(), observation_count=observation_count+1, evidence=%s, trace_reference=COALESCE(%s, trace_reference) WHERE id=%s",
                     (json.dumps(evidence), trace_id, existing[0]),
                 )
             else:
                 cursor.execute(
                     """INSERT INTO incidents
-                    (id, fingerprint, workload, rule, severity, status, first_seen, last_seen, symptoms, evidence, trace_reference, embedding)
-                    VALUES (%s, %s, 'incident-api', %s, %s, 'active', now(), now(), %s, %s, %s, %s::vector)""",
-                    (str(uuid.uuid4()), fingerprint, rule.name, rule.severity, json.dumps(symptoms), json.dumps(evidence), trace_id, vector_literal(local_embedding(rule.symptom))),
+                    (id, fingerprint, title, scenario, workload, rule, severity, status, first_seen, last_seen, symptoms, evidence, trace_reference, observation_count, embedding)
+                    VALUES (%s, %s, %s, %s, 'incident-api', %s, %s, 'active', now(), now(), %s, %s, %s, 1, %s::vector)""",
+                    (str(uuid.uuid4()), fingerprint, rule.symptom, rule.name, rule.name, rule.severity, json.dumps(symptoms), json.dumps(evidence), trace_id, vector_literal(local_embedding(rule.symptom))),
                 )
                 logger.warning("incident detected rule=%s value=%s", rule.name, value)
 
@@ -286,12 +364,13 @@ async def detector_loop() -> None:
 
 
 class ResolveRequest(BaseModel):
+    title: str
     outcome: str
 
 
-async def llm_diagnosis(incident: dict[str, Any], similar: list[dict[str, Any]]) -> dict[str, Any]:
+async def llm_diagnosis(incident: dict[str, Any], similar: list[dict[str, Any]], telemetry: dict[str, Any]) -> dict[str, Any]:
     if LLM_API_BASE and LLM_API_KEY and LLM_MODEL:
-        prompt = json.dumps({"incident": incident, "similar_incidents": similar})
+        prompt = json.dumps({"incident": incident, "telemetry": telemetry, "similar_incidents": similar})
         async with httpx.AsyncClient(timeout=45) as http:
             response = await http.post(
                 f"{LLM_API_BASE.rstrip('/')}/chat/completions",
@@ -310,6 +389,8 @@ async def llm_diagnosis(incident: dict[str, Any], similar: list[dict[str, Any]])
         "error_rate": ("Application errors increased", "The API produced HTTP 5xx responses above the configured rate.", "Inspect API logs and the failing trace, then correct the application or dependency."),
         "api_target_down": ("API replica or scrape target unavailable", "Prometheus reports fewer than two API targets.", "Inspect pod status and allow Kubernetes to recreate the failed pod."),
         "database_failure": ("Database connectivity failure", "The API database health endpoint failed.", "Inspect PostgreSQL and API database connection errors."),
+        "db_pool_exhaustion": ("Database connection pool exhaustion", "Held connections consumed at least 90 percent of the API pool while requests were failing or slowing.", "Release blocked connections, increase the pool size, and restart the API service."),
+        "db_lock_contention": ("Database lock contention", "Requests waited on a database advisory lock and database-backed latency increased.", "Release the blocking transaction and restart or recover the affected service."),
     }.get(rule, ("Unknown incident condition", incident["symptoms"]["summary"], "Inspect metrics, logs, and traces manually."))
     return {"probable_root_cause": fallback[0], "supporting_evidence": [fallback[1]], "confidence": 0.65, "recommended_action": fallback[2], "mode": "local-fallback"}
 
@@ -336,21 +417,22 @@ async def list_incidents(status: str | None = None) -> list[dict[str, Any]]:
     with db_connect() as connection:
         with connection.cursor() as cursor:
             if status:
-                cursor.execute("SELECT id, workload, rule, severity, status, first_seen, last_seen, trace_reference FROM incidents WHERE status=%s ORDER BY first_seen DESC", (status,))
+                cursor.execute("SELECT id, title, scenario, workload, rule, severity, status, first_seen, last_seen, observation_count, trace_reference FROM incidents WHERE status=%s ORDER BY first_seen DESC", (status,))
             else:
-                cursor.execute("SELECT id, workload, rule, severity, status, first_seen, last_seen, trace_reference FROM incidents ORDER BY first_seen DESC")
-            return [dict(zip(("id", "workload", "rule", "severity", "status", "first_seen", "last_seen", "trace_reference"), row)) for row in cursor.fetchall()]
+                cursor.execute("SELECT id, title, scenario, workload, rule, severity, status, first_seen, last_seen, observation_count, trace_reference FROM incidents ORDER BY first_seen DESC")
+            keys = ("id", "title", "scenario", "workload", "rule", "severity", "status", "first_seen", "last_seen", "observation_count", "trace_reference")
+            return [dict(zip(keys, row)) for row in cursor.fetchall()]
 
 
 @app.get("/api/incidents/{incident_id}")
 async def get_incident(incident_id: str) -> dict[str, Any]:
     with db_connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, workload, rule, severity, status, first_seen, last_seen, resolved_at, symptoms, evidence, trace_reference, diagnosis, resolution_outcome FROM incidents WHERE id=%s", (incident_id,))
+            cursor.execute("SELECT id, title, scenario, workload, rule, severity, status, first_seen, last_seen, resolved_at, observation_count, symptoms, evidence, diagnosis_window, trace_reference, diagnosis, resolution_outcome FROM incidents WHERE id=%s", (incident_id,))
             row = cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Incident not found")
-    return dict(zip(("id", "workload", "rule", "severity", "status", "first_seen", "last_seen", "resolved_at", "symptoms", "evidence", "trace_reference", "diagnosis", "resolution_outcome"), row))
+    return dict(zip(("id", "title", "scenario", "workload", "rule", "severity", "status", "first_seen", "last_seen", "resolved_at", "observation_count", "symptoms", "evidence", "diagnosis_window", "trace_reference", "diagnosis", "resolution_outcome"), row))
 
 
 @app.get("/api/incidents/{incident_id}/similar")
@@ -359,19 +441,24 @@ async def similar_incidents(incident_id: str, limit: int = 5) -> list[dict[str, 
     vector = vector_literal(local_embedding(json.dumps(incident["symptoms"])))
     with db_connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, workload, rule, severity, status, diagnosis, embedding <=> %s::vector AS distance FROM incidents WHERE id <> %s ORDER BY embedding <=> %s::vector LIMIT %s", (vector, incident_id, vector, min(limit, 10)))
-            return [dict(zip(("id", "workload", "rule", "severity", "status", "diagnosis", "distance"), row)) for row in cursor.fetchall()]
+            cursor.execute("SELECT id, title, scenario, workload, rule, severity, status, diagnosis, resolution_outcome, embedding <=> %s::vector AS distance FROM incidents WHERE id <> %s AND status = 'resolved' AND diagnosis IS NOT NULL ORDER BY embedding <=> %s::vector LIMIT %s", (vector, incident_id, vector, min(limit, 10)))
+            return [dict(zip(("id", "title", "scenario", "workload", "rule", "severity", "status", "diagnosis", "resolution_outcome", "distance"), row)) for row in cursor.fetchall()]
 
 
 @app.post("/api/incidents/{incident_id}/diagnose")
 async def diagnose_incident(incident_id: str) -> dict[str, Any]:
     incident = await get_incident(incident_id)
+    telemetry = await diagnosis_telemetry(incident)
     similar = await similar_incidents(incident_id)
-    diagnosis = await llm_diagnosis(incident, similar)
+    diagnosis = await llm_diagnosis(incident, similar, telemetry)
     with db_connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("UPDATE incidents SET diagnosis=%s WHERE id=%s", (json.dumps(diagnosis), incident_id))
+            snapshot = dict(incident["evidence"] or {})
+            snapshot["diagnosis_telemetry"] = telemetry
+            cursor.execute("UPDATE incidents SET diagnosis=%s, diagnosis_window=%s, evidence=%s WHERE id=%s", (json.dumps(diagnosis), json.dumps(telemetry), json.dumps(snapshot), incident_id))
     incident["diagnosis"] = diagnosis
+    incident["diagnosis_window"] = telemetry
+    incident["evidence"] = snapshot
     incident["similar_incidents"] = similar
     return incident
 
@@ -380,7 +467,7 @@ async def diagnose_incident(incident_id: str) -> dict[str, Any]:
 async def resolve_incident(incident_id: str, request: ResolveRequest) -> dict[str, Any]:
     with db_connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("UPDATE incidents SET status='resolved', resolved_at=now(), resolution_outcome=%s WHERE id=%s RETURNING id", (request.outcome, incident_id))
+            cursor.execute("UPDATE incidents SET title=%s, status='resolved', resolved_at=now(), resolution_outcome=%s WHERE id=%s RETURNING id", (request.title, request.outcome, incident_id))
             if not cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Incident not found")
     return await get_incident(incident_id)

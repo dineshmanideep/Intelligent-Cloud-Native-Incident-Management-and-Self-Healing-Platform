@@ -5,14 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Incident Demo</title>
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; }
-      button { margin: 4px; padding: 8px 12px; cursor: pointer; }
-      pre { background: #f1f3f5; padding: 16px; min-height: 120px; white-space: pre-wrap; }
+      body { font-family: system-ui, sans-serif; max-width: 980px; margin: 32px auto; padding: 0 20px; color: #202124; }
+      button { margin: 4px; padding: 8px 12px; cursor: pointer; border: 1px solid #adb5bd; border-radius: 5px; background: white; }
+      button:hover { background: #e7f5ff; }
+      pre { background: #f1f3f5; padding: 16px; min-height: 80px; white-space: pre-wrap; overflow: auto; }
+      .scenario, .incident { border: 1px solid #dee2e6; border-radius: 8px; padding: 14px; margin: 12px 0; }
+      .incident h3 { margin: 0 0 8px; }
+      .meta { color: #495057; font-size: 0.9rem; }
+      .active { border-left: 5px solid #e03131; }
+      .resolved { border-left: 5px solid #2f9e44; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #ffe3e3; margin-right: 6px; }
+      .hidden { display: none; }
     </style>
   </head>
   <body>
     <h1>Incident Demo Application</h1>
-    <p>Use these controls to generate observable application behavior.</p>
+    <p>Use the controls to generate observable behavior, then diagnose and resolve incidents from the console.</p>
     <button data-path="/health">Health</button>
     <button data-path="/api/hello">Normal response</button>
     <button data-path="/api/db-check">Database check</button>
@@ -21,14 +29,23 @@
     <button data-path="/api/delay?seconds=5">5-second delay</button>
     <button data-path="/api/cpu?seconds=10">10-second CPU load</button>
     <pre id="output">Choose an action.</pre>
+    <div class="scenario">
+      <h2>Controlled incident scenarios</h2>
+      <button id="cause-pool">Cause DB pool exhaustion</button>
+      <button id="cause-lock">Cause DB lock contention</button>
+      <button id="cause-retry">Cause dependency retry storm</button>
+      <button id="reset-demo">Fix/reset demo scenarios</button>
+      <pre id="scenario-output">No scenario running.</pre>
+    </div>
     <h2>Detected incidents</h2>
     <button id="refresh-incidents">Refresh incidents</button>
-    <pre id="incidents-output">No incidents loaded.</pre>
+    <div id="incidents-output">No incidents loaded.</div>
     <script>
       const configuredApi = new URLSearchParams(window.location.search).get("api");
       const apiBase = configuredApi || (window.location.port === "3000" ? "http://localhost:8000" : "");
       const output = document.querySelector("#output");
       const incidentsOutput = document.querySelector("#incidents-output");
+      const scenarioOutput = document.querySelector("#scenario-output");
 
       function randomHex(bytes) {
         const values = new Uint8Array(bytes);
@@ -40,8 +57,7 @@
         return `00-${randomHex(16)}-${randomHex(8)}-01`;
       }
 
-      for (const button of document.querySelectorAll("button")) {
-        if (button.id === "refresh-incidents") continue;
+      for (const button of document.querySelectorAll("button[data-path]")) {
         button.addEventListener("click", async () => {
           output.textContent = "Loading...";
           try {
@@ -56,18 +72,90 @@
         });
       }
 
+      async function apiRequest(path, options = {}) {
+        const response = await fetch(path, options);
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+        return body;
+      }
+
+      function renderIncident(incident) {
+        const card = document.createElement("section");
+        card.className = `incident ${incident.status}`;
+        const title = incident.title || incident.rule || "Incident";
+        card.innerHTML = `<h3>${title}</h3>
+          <div class="meta"><span class="pill">${incident.severity}</span>
+          ${incident.status} · scenario=${incident.scenario || incident.rule} · observations=${incident.observation_count || 1}</div>
+          <div class="meta">first seen: ${incident.first_seen}<br>last seen: ${incident.last_seen}<br>trace: ${incident.trace_reference || "none"}</div>`;
+        const detail = document.createElement("pre");
+        detail.className = "hidden";
+        const diagnose = document.createElement("button");
+        diagnose.textContent = "Diagnose with telemetry + memory";
+        diagnose.onclick = async () => {
+          diagnose.disabled = true;
+          detail.className = "";
+          detail.textContent = "Collecting five minutes of metrics, logs, traces, and similar resolved incidents...";
+          try {
+            const body = await apiRequest(`/incidents/api/incidents/${incident.id}/diagnose`, { method: "POST" });
+            detail.textContent = JSON.stringify(body, null, 2);
+            if (incident.status === "active") {
+              const resolve = document.createElement("button");
+              resolve.textContent = "Resolve incident";
+              resolve.onclick = async () => {
+                const title = prompt("Incident title:", body.title || body.rule || "Incident");
+                if (!title) return;
+                const outcome = prompt("Resolution / solution:", "Released the blocked resource and restarted the affected service.");
+                if (!outcome) return;
+                resolve.disabled = true;
+                await apiRequest(`/incidents/api/incidents/${incident.id}/resolve`, {
+                  method: "POST", headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ title, outcome })
+                });
+                await refreshIncidents();
+              };
+              card.appendChild(resolve);
+            }
+          } catch (error) { detail.textContent = `Diagnosis failed: ${error}`; diagnose.disabled = false; }
+        };
+        card.appendChild(diagnose);
+        card.appendChild(detail);
+        return card;
+      }
+
       async function refreshIncidents() {
         incidentsOutput.textContent = "Loading incidents...";
         try {
-          const response = await fetch("/incidents/api/incidents");
-          const body = await response.json();
-          incidentsOutput.textContent = JSON.stringify(body, null, 2);
+          const body = await apiRequest("/incidents/api/incidents");
+          incidentsOutput.textContent = "";
+          if (!body.length) { incidentsOutput.textContent = "No incidents found."; return; }
+          body.forEach((incident) => incidentsOutput.appendChild(renderIncident(incident)));
         } catch (error) {
           incidentsOutput.textContent = `Incident service unavailable: ${error}`;
         }
       }
 
       document.querySelector("#refresh-incidents").addEventListener("click", refreshIncidents);
+      async function runScenario(path, message, followup) {
+        scenarioOutput.textContent = message;
+        try {
+          const result = await apiRequest(path, { method: "POST" });
+          scenarioOutput.textContent = JSON.stringify(result, null, 2);
+          if (followup) await followup();
+          setTimeout(refreshIncidents, 22000);
+        } catch (error) { scenarioOutput.textContent = `Scenario failed: ${error}`; }
+      }
+      document.querySelector("#cause-pool").onclick = () => runScenario("/api/demo/db-pool-exhaust", "Holding all API database-pool connections...", async () => {
+        await Promise.all([1, 2, 3, 4].map(() => apiRequest("/api/demo/db-pool-exhaust", { method: "POST" }).catch(() => null)));
+      });
+      document.querySelector("#cause-lock").onclick = () => runScenario("/api/demo/db-lock/start", "Holding the demo database lock...", async () => {
+        for (let i = 0; i < 12; i++) fetch("/api/items").catch(() => null);
+      });
+      document.querySelector("#cause-retry").onclick = () => runScenario("/api/demo/dependency-failure", "Activating dependency timeout and retries...", async () => {
+        for (let i = 0; i < 30; i++) fetch("/api/demo/downstream").catch(() => null);
+      });
+      document.querySelector("#reset-demo").onclick = () => runScenario("/api/demo/reset", "Releasing demo resources...", refreshIncidents);
+      refreshIncidents();
+      setInterval(refreshIncidents, 15000);
     </script>
   </body>
 </html>
