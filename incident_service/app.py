@@ -39,6 +39,7 @@ PROMETHEUS_URL = env("PROMETHEUS_URL", "http://localhost:9090")
 JAEGER_URL = env("JAEGER_URL", "http://localhost:16686")
 INCIDENT_API_URL = env("INCIDENT_API_URL", "http://localhost:8000")
 DETECTION_INTERVAL = int(env("DETECTION_INTERVAL_SECONDS", "15"))
+DIAGNOSIS_WINDOW_MINUTES = int(env("DIAGNOSIS_WINDOW_MINUTES", "2"))
 EMBEDDING_API_BASE = env("EMBEDDING_API_BASE_URL", "")
 EMBEDDING_API_KEY = env("EMBEDDING_API_KEY", "")
 EMBEDDING_MODEL = env("EMBEDDING_MODEL", "")
@@ -277,7 +278,7 @@ async def log_evidence(since_seconds: int = 300) -> list[str]:
 async def diagnosis_telemetry(incident: dict[str, Any]) -> dict[str, Any]:
     end = now()
     start = end.replace(microsecond=0)
-    start = start - timedelta(minutes=5)
+    start = start - timedelta(minutes=DIAGNOSIS_WINDOW_MINUTES)
     queries = {rule.name: rule.query for rule in RULES}
     ranges = {name: await prometheus_range(query, start, end) for name, query in queries.items()}
     return {
@@ -457,6 +458,8 @@ async def similar_incidents(incident_id: str, limit: int = 5) -> list[dict[str, 
 @app.post("/api/incidents/{incident_id}/diagnose")
 async def diagnose_incident(incident_id: str) -> dict[str, Any]:
     incident = await get_incident(incident_id)
+    if incident["status"] != "active":
+        raise HTTPException(status_code=409, detail="Only active incidents can be diagnosed")
     symptoms = dict(incident["symptoms"] or {})
     symptoms["canonical_text"] = f"incident-api rule={incident['rule']} symptom={symptoms.get('summary', '')}"
     incident["symptoms"] = symptoms

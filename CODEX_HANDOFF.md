@@ -78,7 +78,7 @@ Kubernetes monitoring URLs use absolute service DNS names with a trailing dot be
 - Prometheus metrics for held connections, capacity, lock mode, dependency failure, and retries.
 - True 5xx ratio rule: 5xx requests divided by all requests.
 - Rules for CPU, p95 latency, error ratio, pool occupancy, lock contention, retry storm, target availability, and database failure.
-- Five-minute Prometheus range collection during diagnosis.
+- Two-minute Prometheus range collection during diagnosis, configurable with `DIAGNOSIS_WINDOW_MINUTES`.
 - Kubernetes API log collection with `pods/log` RBAC.
 - Incident title, scenario, observation count, diagnosis window, metrics, logs, pod evidence, and trace reference fields.
 - Similarity results restricted to resolved incidents with diagnosis.
@@ -94,7 +94,8 @@ Kubernetes monitoring URLs use absolute service DNS names with a trailing dot be
 - `backend/requirements.txt`: includes `psycopg[pool,binary]`.
 - `incident_service/app.py`: schema migration, detector, telemetry collection, diagnosis, retrieval, resolution APIs.
 - `incident_service/tests/test_incident_service.py`: embedding/rule/fallback tests.
-- `frontend/index.html`: scenario controls and incident console.
+- `frontend/index.html`: clean QuickCart application.
+- `frontend/operations.html`: scenario controls and incident diagnosis console at `/operations`.
 - `frontend/nginx.conf`: `/incidents/` proxy.
 - `k8s/00-config.yaml`: pool settings.
 - `k8s/02-api.yaml`: API session affinity.
@@ -222,7 +223,7 @@ Kubernetes verification passed after restarting Minikube:
 - Lock contention caused `/api/items` to time out.
 - Reset restored `/api/items` successfully.
 - The detector created a `db_pool_exhaustion` incident.
-- Diagnose returned local fallback mode and a five-minute telemetry snapshot containing metrics, logs, pods, and trace fields.
+- Diagnose returned local fallback mode and a two-minute telemetry snapshot containing metrics, logs, pods, and trace fields.
 - Diagnose returned similar incidents from pgvector.
 - Resolve stored the title and solution and marked the incident resolved.
 

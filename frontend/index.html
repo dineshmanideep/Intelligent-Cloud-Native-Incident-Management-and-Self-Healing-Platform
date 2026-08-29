@@ -3,170 +3,80 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Incident Demo</title>
+    <title>QuickCart</title>
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 980px; margin: 32px auto; padding: 0 20px; color: #202124; }
-      button { margin: 4px; padding: 8px 12px; cursor: pointer; border: 1px solid #adb5bd; border-radius: 5px; background: white; }
-      button:hover { background: #e7f5ff; }
-      pre { background: #f1f3f5; padding: 16px; min-height: 80px; white-space: pre-wrap; overflow: auto; }
-      .scenario, .incident { border: 1px solid #dee2e6; border-radius: 8px; padding: 14px; margin: 12px 0; }
-      .incident h3 { margin: 0 0 8px; }
-      .meta { color: #495057; font-size: 0.9rem; }
-      .active { border-left: 5px solid #e03131; }
-      .resolved { border-left: 5px solid #2f9e44; }
-      .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #ffe3e3; margin-right: 6px; }
-      .hidden { display: none; }
+      :root { --ink:#172033; --muted:#667085; --line:#e5e7eb; --brand:#2563eb; --soft:#f7f9fc; }
+      * { box-sizing:border-box; }
+      body { margin:0; font-family:system-ui,sans-serif; color:var(--ink); background:var(--soft); }
+      header { background:#fff; border-bottom:1px solid var(--line); }
+      .bar, main { max-width:1100px; margin:auto; padding:0 24px; }
+      .bar { height:72px; display:flex; align-items:center; justify-content:space-between; }
+      .brand { color:var(--ink); font-size:1.35rem; font-weight:800; text-decoration:none; }
+      nav a { color:var(--muted); text-decoration:none; margin-left:22px; font-size:.95rem; }
+      nav a:hover { color:var(--brand); }
+      main { padding-top:42px; padding-bottom:56px; }
+      .hero { display:flex; justify-content:space-between; gap:28px; align-items:end; margin-bottom:24px; }
+      h1 { font-size:clamp(2rem,4vw,3.2rem); line-height:1.05; margin:0 0 12px; letter-spacing:-.04em; }
+      h2 { margin:0 0 16px; font-size:1.15rem; }
+      p { color:var(--muted); margin:0; line-height:1.6; }
+      .search { width:min(320px,100%); padding:12px 14px; border:1px solid var(--line); border-radius:9px; font:inherit; background:#fff; }
+      .layout { display:grid; grid-template-columns:1fr 310px; gap:22px; align-items:start; }
+      .panel, .product { background:#fff; border:1px solid var(--line); border-radius:12px; }
+      .panel { padding:20px; }
+      .products { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+      .product { padding:18px; display:flex; flex-direction:column; min-height:190px; }
+      .emoji { font-size:2rem; margin-bottom:18px; }
+      .product h3 { margin:0 0 6px; font-size:1rem; }
+      .price { font-weight:750; margin-top:auto; padding-top:16px; }
+      button { border:0; border-radius:8px; background:var(--brand); color:#fff; padding:10px 13px; font:inherit; font-weight:650; cursor:pointer; }
+      button:hover { background:#1d4ed8; }
+      .product button, #checkout { margin-top:12px; width:100%; }
+      .cart-row { display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); font-size:.94rem; }
+      .cart-row small { color:var(--muted); display:block; margin-top:3px; }
+      .total { display:flex; justify-content:space-between; font-weight:750; padding:18px 0; }
+      #message { min-height:26px; color:#19734a; margin-top:14px; font-size:.92rem; }
+      .empty { color:var(--muted); padding:14px 0; }
+      @media (max-width:760px) { .hero { display:block; } .search { margin-top:18px; width:100%; } .layout { grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
-    <h1>Incident Demo Application</h1>
-    <p>Use the controls to generate observable behavior, then diagnose and resolve incidents from the console.</p>
-    <button data-path="/health">Health</button>
-    <button data-path="/api/hello">Normal response</button>
-    <button data-path="/api/db-check">Database check</button>
-    <button data-path="/api/items">Database query</button>
-    <button data-path="/api/error">HTTP 500 error</button>
-    <button data-path="/api/delay?seconds=5">5-second delay</button>
-    <button data-path="/api/cpu?seconds=10">10-second CPU load</button>
-    <pre id="output">Choose an action.</pre>
-    <div class="scenario">
-      <h2>Controlled incident scenarios</h2>
-      <button id="cause-pool">Cause DB pool exhaustion</button>
-      <button id="cause-lock">Cause DB lock contention</button>
-      <button id="cause-retry">Cause dependency retry storm</button>
-      <button id="reset-demo">Fix/reset demo scenarios</button>
-      <pre id="scenario-output">No scenario running.</pre>
-    </div>
-    <h2>Incident console</h2>
-    <button id="refresh-incidents">Refresh incidents</button>
-    <button id="diagnose-incident">Diagnose active incident</button>
-    <button id="resolve-incident" class="hidden">Resolve diagnosed incident</button>
-    <button id="cancel-diagnosis" class="hidden">Cancel diagnosis</button>
-    <button id="clear-memory">Clear demo incident memory</button>
-    <pre id="console-output">Click Refresh incidents to load candidates.</pre>
-    <div id="incidents-output"></div>
-    <pre id="diagnosis-output" class="hidden"></pre>
+    <header><div class="bar"><a class="brand" href="/">QuickCart</a><nav><a href="#products">Shop</a><a href="#orders">Orders</a><a href="/operations">Operations</a></nav></div></header>
+    <main>
+      <section class="hero"><div><h1>Everyday essentials,<br>delivered simply.</h1><p>A small, reliable store for the things you need.</p></div><input id="search" class="search" type="search" placeholder="Search products"></section>
+      <div class="layout">
+        <section id="products" class="panel"><h2>Featured products</h2><div id="product-list" class="products"></div><div id="message"></div></section>
+        <aside class="panel"><h2>Your cart</h2><div id="cart"></div><div class="total"><span>Total</span><span id="total">₹0</span></div><button id="checkout">Place order</button></aside>
+      </div>
+      <section id="orders" class="panel" style="margin-top:22px"><h2>Recent orders</h2><div id="orders-list" class="empty">No orders yet. Add something to your cart to get started.</div></section>
+    </main>
     <script>
-      const configuredApi = new URLSearchParams(window.location.search).get("api");
-      const apiBase = configuredApi || (window.location.port === "3000" ? "http://localhost:8000" : "");
-      const output = document.querySelector("#output");
-      const incidentsOutput = document.querySelector("#incidents-output");
-      const scenarioOutput = document.querySelector("#scenario-output");
-      const consoleOutput = document.querySelector("#console-output");
-      const diagnosisOutput = document.querySelector("#diagnosis-output");
-      const diagnoseButton = document.querySelector("#diagnose-incident");
-      const resolveButton = document.querySelector("#resolve-incident");
-      const cancelButton = document.querySelector("#cancel-diagnosis");
-      let loadedIncidents = [];
-      let diagnosedIncident = null;
-
-      function randomHex(bytes) {
-        const values = new Uint8Array(bytes);
-        crypto.getRandomValues(values);
-        return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
-      }
-
-      function traceparent() {
-        return `00-${randomHex(16)}-${randomHex(8)}-01`;
-      }
-
-      for (const button of document.querySelectorAll("button[data-path]")) {
-        button.addEventListener("click", async () => {
-          output.textContent = "Loading...";
-          try {
-            const response = await fetch(apiBase + button.dataset.path, {
-              headers: { "traceparent": traceparent() }
-            });
-            const body = await response.json();
-            output.textContent = JSON.stringify({ status: response.status, body }, null, 2);
-          } catch (error) {
-            output.textContent = `Request failed: ${error}`;
-          }
+      const products = [
+        { id:1, name:"Daily planner", description:"A simple notebook for focused days.", price:349, emoji:"📓" },
+        { id:2, name:"Travel mug", description:"Insulated stainless steel, 350 ml.", price:799, emoji:"☕" },
+        { id:3, name:"Desk lamp", description:"Warm LED light with a compact design.", price:1299, emoji:"💡" },
+        { id:4, name:"Canvas tote", description:"A durable everyday carry bag.", price:499, emoji:"👜" }
+      ];
+      const cart = new Map(); const orders = [];
+      const money = value => `₹${value.toLocaleString("en-IN")}`;
+      function renderProducts(filter="") {
+        const list=document.querySelector("#product-list"); list.innerHTML="";
+        products.filter(p => `${p.name} ${p.description}`.toLowerCase().includes(filter.toLowerCase())).forEach(p => {
+          const card=document.createElement("article"); card.className="product";
+          card.innerHTML=`<div class="emoji">${p.emoji}</div><h3>${p.name}</h3><p>${p.description}</p><div class="price">${money(p.price)}</div><button data-add="${p.id}">Add to cart</button>`; list.appendChild(card);
         });
+        if (!list.children.length) list.innerHTML='<p class="empty">No products found.</p>';
       }
-
-      async function apiRequest(path, options = {}) {
-        const response = await fetch(path, options);
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
-        return body;
+      function renderCart() {
+        const target=document.querySelector("#cart"); target.innerHTML=""; let total=0;
+        if (!cart.size) target.innerHTML='<div class="empty">Your cart is empty.</div>';
+        cart.forEach((quantity,id) => { const p=products.find(item=>item.id===id); total += p.price*quantity; const row=document.createElement("div"); row.className="cart-row"; row.innerHTML=`<span>${p.name}<small>Qty ${quantity}</small></span><strong>${money(p.price*quantity)}</strong>`; target.appendChild(row); });
+        document.querySelector("#total").textContent=money(total);
       }
-
-      function formatTime(value) {
-        if (!value) return "not available";
-        return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "medium", timeZone: "Asia/Kolkata", timeZoneName: "short" }).format(new Date(value));
-      }
-
-      function renderIncident(incident) {
-        const card = document.createElement("section");
-        card.className = `incident ${incident.status}`;
-        const title = incident.title || "Unclassified incident candidate";
-        card.innerHTML = `<h3>${title}</h3>
-          <div class="meta"><span class="pill">${incident.severity}</span>
-          ${incident.status} · observations=${incident.observation_count || 1}</div>
-          <div class="meta">first detected: ${formatTime(incident.first_seen)}<br>last seen: ${formatTime(incident.last_seen)}<br>trace: ${incident.trace_reference || "none"}</div>`;
-        return card;
-      }
-
-      async function refreshIncidents() {
-        incidentsOutput.textContent = "Loading incidents...";
-        try {
-          const body = await apiRequest("/incidents/api/incidents");
-          loadedIncidents = body;
-          incidentsOutput.textContent = "";
-          if (!body.length) { incidentsOutput.textContent = "No incidents found."; return; }
-          body.forEach((incident) => incidentsOutput.appendChild(renderIncident(incident)));
-          consoleOutput.textContent = `Loaded ${body.length} incidents. Select Diagnose active incident to analyze current evidence.`;
-        } catch (error) {
-          incidentsOutput.textContent = `Incident service unavailable: ${error}`;
-        }
-      }
-
-      document.querySelector("#refresh-incidents").addEventListener("click", refreshIncidents);
-      async function runScenario(path, message, followup) {
-        scenarioOutput.textContent = message;
-        try {
-          const result = await apiRequest(path, { method: "POST" });
-          scenarioOutput.textContent = JSON.stringify(result, null, 2);
-          if (followup) await followup();
-        } catch (error) { scenarioOutput.textContent = `Scenario failed: ${error}`; }
-      }
-      document.querySelector("#cause-pool").onclick = () => runScenario("/api/demo/db-pool-exhaust", "Holding all API database-pool connections...");
-      document.querySelector("#cause-lock").onclick = () => runScenario("/api/demo/db-lock/start", "Holding the demo database lock...", async () => { for (let i = 0; i < 12; i++) fetch("/api/items").catch(() => null); });
-      document.querySelector("#cause-retry").onclick = () => runScenario("/api/demo/dependency-failure", "Activating dependency timeout and retries...", async () => { for (let i = 0; i < 30; i++) fetch("/api/demo/downstream").catch(() => null); });
-      document.querySelector("#reset-demo").onclick = () => runScenario("/api/demo/reset", "Releasing demo resources...");
-
-      diagnoseButton.onclick = async () => {
-        const active = loadedIncidents.filter((incident) => incident.status === "active");
-        if (!active.length) { consoleOutput.textContent = "No active incident available for diagnosis. Click Refresh incidents after triggering a scenario."; return; }
-        let selected = active[0];
-        if (active.length > 1) {
-          const choice = prompt(`Enter the number to diagnose:\n${active.map((item, index) => `${index + 1}. ${item.title || item.rule}`).join("\n")}`, "1");
-          selected = active[Math.max(0, Math.min(active.length - 1, Number(choice || 1) - 1))];
-        }
-        diagnoseButton.disabled = true;
-        diagnosisOutput.className = "";
-        diagnosisOutput.textContent = "Collecting five minutes of metrics, logs, traces, and resolved memory...";
-        try {
-          diagnosedIncident = await apiRequest(`/incidents/api/incidents/${selected.id}/diagnose`, { method: "POST" });
-          diagnosisOutput.textContent = JSON.stringify(diagnosedIncident, null, 2);
-          resolveButton.className = "";
-          cancelButton.className = "";
-          consoleOutput.textContent = `Diagnosis complete using ${diagnosedIncident.diagnosis?.mode || "configured provider"}.`;
-        } catch (error) { diagnosisOutput.textContent = `Diagnosis failed: ${error}`; diagnoseButton.disabled = false; }
-      };
-      resolveButton.onclick = async () => {
-        if (!diagnosedIncident) return;
-        const title = prompt("Final incident title:", diagnosedIncident.diagnosis?.probable_root_cause || "Incident");
-        if (!title) return;
-        const outcome = prompt("Resolution / solution:", "Released the blocked resource and restarted the affected service.");
-        if (!outcome) return;
-        await apiRequest(`/incidents/api/incidents/${diagnosedIncident.id}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, outcome }) });
-        consoleOutput.textContent = "Incident resolved and saved to long-term memory. Click Refresh incidents to view the updated list.";
-        cancelButton.click();
-      };
-      cancelButton.onclick = () => { diagnosedIncident = null; diagnosisOutput.textContent = "Diagnosis cancelled."; diagnosisOutput.className = ""; resolveButton.className = "hidden"; cancelButton.className = "hidden"; diagnoseButton.disabled = false; };
-      document.querySelector("#clear-memory").onclick = async () => { if (!confirm("Delete all incident history, including resolved memory?")) return; const result = await apiRequest("/incidents/api/admin/reset-memory", { method: "POST" }); consoleOutput.textContent = `Deleted ${result.deleted_incidents} incidents. Click Refresh incidents.`; incidentsOutput.textContent = ""; loadedIncidents = []; };
+      function renderOrders() { const target=document.querySelector("#orders-list"); if (!orders.length) { target.className="empty"; target.textContent="No orders yet. Add something to your cart to get started."; return; } target.className=""; target.innerHTML=orders.map(o=>`<div class="cart-row"><span>Order ${o.id}<small>${o.items} item(s) · ${o.time}</small></span><strong>${money(o.total)}</strong></div>`).join(""); }
+      document.querySelector("#product-list").addEventListener("click", e => { const id=Number(e.target.dataset.add); if (!id) return; cart.set(id,(cart.get(id)||0)+1); renderCart(); document.querySelector("#message").textContent="Added to your cart."; });
+      document.querySelector("#search").addEventListener("input", e => renderProducts(e.target.value));
+      document.querySelector("#checkout").addEventListener("click", async () => { if (!cart.size) { document.querySelector("#message").textContent="Add a product before checking out."; return; } const total=[...cart].reduce((sum,[id,q])=>sum+products.find(p=>p.id===id).price*q,0); const response=await fetch("/api/hello"); if (!response.ok) { document.querySelector("#message").textContent="Checkout is temporarily unavailable."; return; } orders.unshift({id:`QC-${String(orders.length+1).padStart(3,"0")}`,items:[...cart.values()].reduce((a,b)=>a+b,0),total,time:new Intl.DateTimeFormat("en-IN",{dateStyle:"medium",timeZone:"Asia/Kolkata"}).format(new Date())}); cart.clear(); renderCart(); renderOrders(); document.querySelector("#message").textContent="Order placed successfully."; });
+      renderProducts(); renderCart();
     </script>
   </body>
 </html>

@@ -126,7 +126,7 @@ curl -X POST http://$(minikube ip):30080/api/demo/dependency-failure
 curl -X POST http://$(minikube ip):30080/api/demo/reset
 ```
 
-Diagnosis collects a five-minute Prometheus range, recent API logs, pod status, and a Jaeger trace reference. The default
+Diagnosis collects a two-minute Prometheus range, recent API logs, pod status, and a Jaeger trace reference. The default
 diagnosis is a safe local fallback; the LLM is called only when the Diagnose action is requested. Configure
 `LLM_API_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in the incident service Secret/ConfigMap to enable an OpenAI-compatible
 diagnosis provider. Kubernetes recovery is intentionally manual; the demo reset endpoints only release controlled resources.
