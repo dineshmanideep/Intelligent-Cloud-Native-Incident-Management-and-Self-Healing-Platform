@@ -47,9 +47,11 @@ Kubernetes monitoring URLs use absolute service DNS names with a trailing dot be
 - Minikube with the Docker driver is the target environment.
 - Python dependencies are installed into `.venv`; container dependencies are installed during image builds.
 - Prometheus and Jaeger retain telemetry; the incident service queries history when needed.
-- Detection runs every 15 seconds.
+- Detection runs every 15 seconds in the backend; the browser refreshes incident data only when Refresh incidents is clicked.
 - Repeated observations update `last_seen` and `observation_count`; one failed request does not create one incident per request.
-- Long-term similarity memory is intended to contain resolved, diagnosed incidents.
+- Active incidents remain neutral candidates. A final root-cause title is entered only during Resolve.
+- Long-term similarity memory contains only incidents that were explicitly diagnosed and resolved.
+- `POST /incidents/api/admin/reset-memory` deletes all incident records, including resolved RAG memory, without deleting the database volume.
 - The current pgvector column is `vector(64)`; external embeddings remain optional.
 - LLM diagnosis is manual and optional. The provider must expose an OpenAI-compatible `/chat/completions` endpoint. Native Gemini payloads are not implemented.
 - Kubernetes remediation is not automatic. Demo reset endpoints release controlled resources; Resolve records the human solution.
@@ -81,7 +83,7 @@ Kubernetes monitoring URLs use absolute service DNS names with a trailing dot be
 - Incident title, scenario, observation count, diagnosis window, metrics, logs, pod evidence, and trace reference fields.
 - Similarity results restricted to resolved incidents with diagnosis.
 - Resolve accepts a title and outcome.
-- Frontend scenario controls, incident cards, automatic 15-second refresh, Diagnose, Resolve, and Reset controls.
+- Frontend scenario controls, neutral incident cards, manual Refresh, standalone Diagnose, Resolve/Cancel controls, and memory reset.
 
 ## Important files
 

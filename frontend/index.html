@@ -37,15 +37,28 @@
       <button id="reset-demo">Fix/reset demo scenarios</button>
       <pre id="scenario-output">No scenario running.</pre>
     </div>
-    <h2>Detected incidents</h2>
+    <h2>Incident console</h2>
     <button id="refresh-incidents">Refresh incidents</button>
-    <div id="incidents-output">No incidents loaded.</div>
+    <button id="diagnose-incident">Diagnose active incident</button>
+    <button id="resolve-incident" class="hidden">Resolve diagnosed incident</button>
+    <button id="cancel-diagnosis" class="hidden">Cancel diagnosis</button>
+    <button id="clear-memory">Clear demo incident memory</button>
+    <pre id="console-output">Click Refresh incidents to load candidates.</pre>
+    <div id="incidents-output"></div>
+    <pre id="diagnosis-output" class="hidden"></pre>
     <script>
       const configuredApi = new URLSearchParams(window.location.search).get("api");
       const apiBase = configuredApi || (window.location.port === "3000" ? "http://localhost:8000" : "");
       const output = document.querySelector("#output");
       const incidentsOutput = document.querySelector("#incidents-output");
       const scenarioOutput = document.querySelector("#scenario-output");
+      const consoleOutput = document.querySelector("#console-output");
+      const diagnosisOutput = document.querySelector("#diagnosis-output");
+      const diagnoseButton = document.querySelector("#diagnose-incident");
+      const resolveButton = document.querySelector("#resolve-incident");
+      const cancelButton = document.querySelector("#cancel-diagnosis");
+      let loadedIncidents = [];
+      let diagnosedIncident = null;
 
       function randomHex(bytes) {
         const values = new Uint8Array(bytes);
@@ -79,46 +92,19 @@
         return body;
       }
 
+      function formatTime(value) {
+        if (!value) return "not available";
+        return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "medium", timeZone: "Asia/Kolkata", timeZoneName: "short" }).format(new Date(value));
+      }
+
       function renderIncident(incident) {
         const card = document.createElement("section");
         card.className = `incident ${incident.status}`;
-        const title = incident.title || incident.rule || "Incident";
+        const title = incident.title || "Unclassified incident candidate";
         card.innerHTML = `<h3>${title}</h3>
           <div class="meta"><span class="pill">${incident.severity}</span>
-          ${incident.status} · scenario=${incident.scenario || incident.rule} · observations=${incident.observation_count || 1}</div>
-          <div class="meta">first seen: ${incident.first_seen}<br>last seen: ${incident.last_seen}<br>trace: ${incident.trace_reference || "none"}</div>`;
-        const detail = document.createElement("pre");
-        detail.className = "hidden";
-        const diagnose = document.createElement("button");
-        diagnose.textContent = "Diagnose with telemetry + memory";
-        diagnose.onclick = async () => {
-          diagnose.disabled = true;
-          detail.className = "";
-          detail.textContent = "Collecting five minutes of metrics, logs, traces, and similar resolved incidents...";
-          try {
-            const body = await apiRequest(`/incidents/api/incidents/${incident.id}/diagnose`, { method: "POST" });
-            detail.textContent = JSON.stringify(body, null, 2);
-            if (incident.status === "active") {
-              const resolve = document.createElement("button");
-              resolve.textContent = "Resolve incident";
-              resolve.onclick = async () => {
-                const title = prompt("Incident title:", body.title || body.rule || "Incident");
-                if (!title) return;
-                const outcome = prompt("Resolution / solution:", "Released the blocked resource and restarted the affected service.");
-                if (!outcome) return;
-                resolve.disabled = true;
-                await apiRequest(`/incidents/api/incidents/${incident.id}/resolve`, {
-                  method: "POST", headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ title, outcome })
-                });
-                await refreshIncidents();
-              };
-              card.appendChild(resolve);
-            }
-          } catch (error) { detail.textContent = `Diagnosis failed: ${error}`; diagnose.disabled = false; }
-        };
-        card.appendChild(diagnose);
-        card.appendChild(detail);
+          ${incident.status} · observations=${incident.observation_count || 1}</div>
+          <div class="meta">first detected: ${formatTime(incident.first_seen)}<br>last seen: ${formatTime(incident.last_seen)}<br>trace: ${incident.trace_reference || "none"}</div>`;
         return card;
       }
 
@@ -126,9 +112,11 @@
         incidentsOutput.textContent = "Loading incidents...";
         try {
           const body = await apiRequest("/incidents/api/incidents");
+          loadedIncidents = body;
           incidentsOutput.textContent = "";
           if (!body.length) { incidentsOutput.textContent = "No incidents found."; return; }
           body.forEach((incident) => incidentsOutput.appendChild(renderIncident(incident)));
+          consoleOutput.textContent = `Loaded ${body.length} incidents. Select Diagnose active incident to analyze current evidence.`;
         } catch (error) {
           incidentsOutput.textContent = `Incident service unavailable: ${error}`;
         }
@@ -141,21 +129,44 @@
           const result = await apiRequest(path, { method: "POST" });
           scenarioOutput.textContent = JSON.stringify(result, null, 2);
           if (followup) await followup();
-          setTimeout(refreshIncidents, 22000);
         } catch (error) { scenarioOutput.textContent = `Scenario failed: ${error}`; }
       }
-      document.querySelector("#cause-pool").onclick = () => runScenario("/api/demo/db-pool-exhaust", "Holding all API database-pool connections...", async () => {
-        await Promise.all([1, 2, 3, 4].map(() => apiRequest("/api/demo/db-pool-exhaust", { method: "POST" }).catch(() => null)));
-      });
-      document.querySelector("#cause-lock").onclick = () => runScenario("/api/demo/db-lock/start", "Holding the demo database lock...", async () => {
-        for (let i = 0; i < 12; i++) fetch("/api/items").catch(() => null);
-      });
-      document.querySelector("#cause-retry").onclick = () => runScenario("/api/demo/dependency-failure", "Activating dependency timeout and retries...", async () => {
-        for (let i = 0; i < 30; i++) fetch("/api/demo/downstream").catch(() => null);
-      });
-      document.querySelector("#reset-demo").onclick = () => runScenario("/api/demo/reset", "Releasing demo resources...", refreshIncidents);
-      refreshIncidents();
-      setInterval(refreshIncidents, 15000);
+      document.querySelector("#cause-pool").onclick = () => runScenario("/api/demo/db-pool-exhaust", "Holding all API database-pool connections...");
+      document.querySelector("#cause-lock").onclick = () => runScenario("/api/demo/db-lock/start", "Holding the demo database lock...", async () => { for (let i = 0; i < 12; i++) fetch("/api/items").catch(() => null); });
+      document.querySelector("#cause-retry").onclick = () => runScenario("/api/demo/dependency-failure", "Activating dependency timeout and retries...", async () => { for (let i = 0; i < 30; i++) fetch("/api/demo/downstream").catch(() => null); });
+      document.querySelector("#reset-demo").onclick = () => runScenario("/api/demo/reset", "Releasing demo resources...");
+
+      diagnoseButton.onclick = async () => {
+        const active = loadedIncidents.filter((incident) => incident.status === "active");
+        if (!active.length) { consoleOutput.textContent = "No active incident available for diagnosis. Click Refresh incidents after triggering a scenario."; return; }
+        let selected = active[0];
+        if (active.length > 1) {
+          const choice = prompt(`Enter the number to diagnose:\n${active.map((item, index) => `${index + 1}. ${item.title || item.rule}`).join("\n")}`, "1");
+          selected = active[Math.max(0, Math.min(active.length - 1, Number(choice || 1) - 1))];
+        }
+        diagnoseButton.disabled = true;
+        diagnosisOutput.className = "";
+        diagnosisOutput.textContent = "Collecting five minutes of metrics, logs, traces, and resolved memory...";
+        try {
+          diagnosedIncident = await apiRequest(`/incidents/api/incidents/${selected.id}/diagnose`, { method: "POST" });
+          diagnosisOutput.textContent = JSON.stringify(diagnosedIncident, null, 2);
+          resolveButton.className = "";
+          cancelButton.className = "";
+          consoleOutput.textContent = `Diagnosis complete using ${diagnosedIncident.diagnosis?.mode || "configured provider"}.`;
+        } catch (error) { diagnosisOutput.textContent = `Diagnosis failed: ${error}`; diagnoseButton.disabled = false; }
+      };
+      resolveButton.onclick = async () => {
+        if (!diagnosedIncident) return;
+        const title = prompt("Final incident title:", diagnosedIncident.diagnosis?.probable_root_cause || "Incident");
+        if (!title) return;
+        const outcome = prompt("Resolution / solution:", "Released the blocked resource and restarted the affected service.");
+        if (!outcome) return;
+        await apiRequest(`/incidents/api/incidents/${diagnosedIncident.id}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, outcome }) });
+        consoleOutput.textContent = "Incident resolved and saved to long-term memory. Click Refresh incidents to view the updated list.";
+        cancelButton.click();
+      };
+      cancelButton.onclick = () => { diagnosedIncident = null; diagnosisOutput.textContent = "Diagnosis cancelled."; diagnosisOutput.className = ""; resolveButton.className = "hidden"; cancelButton.className = "hidden"; diagnoseButton.disabled = false; };
+      document.querySelector("#clear-memory").onclick = async () => { if (!confirm("Delete all incident history, including resolved memory?")) return; const result = await apiRequest("/incidents/api/admin/reset-memory", { method: "POST" }); consoleOutput.textContent = `Deleted ${result.deleted_incidents} incidents. Click Refresh incidents.`; incidentsOutput.textContent = ""; loadedIncidents = []; };
     </script>
   </body>
 </html>

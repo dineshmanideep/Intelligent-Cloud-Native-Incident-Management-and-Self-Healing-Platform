@@ -19,3 +19,4 @@ def test_fallback_diagnosis_explains_pool_exhaustion() -> None:
     result = asyncio.run(llm_diagnosis(incident, [], {}))
     assert result["mode"] == "local-fallback"
     assert "pool" in result["probable_root_cause"].lower()
+    assert result["possible_root_causes"]
