@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 
@@ -37,6 +38,7 @@ REQUEST_LATENCY = Histogram(
 DEMO_DEPENDENCY_RETRIES = Counter("demo_dependency_retries_total", "Retries performed by the dependency demo")
 DEMO_DEPENDENCY_FAILURE = Gauge("demo_dependency_failure_active", "Whether the dependency failure demo is active")
 _dependency_failure_active = False
+_demo_stop_requested = threading.Event()
 
 
 @asynccontextmanager
@@ -123,10 +125,18 @@ async def demo_db_lock_start() -> dict[str, str]:
 async def demo_reset() -> dict[str, str]:
     global _dependency_failure_active
     _dependency_failure_active = False
+    _demo_stop_requested.set()
     DEMO_DEPENDENCY_FAILURE.set(0)
     await asyncio.to_thread(reset_demo_state)
     logger.info("demo scenarios reset")
     return {"status": "reset"}
+
+
+@app.post("/api/demo/stop")
+async def demo_stop() -> dict[str, str]:
+    """Stop persistent and cancellable demo activity without touching incidents or memory."""
+    await demo_reset()
+    return {"status": "stopped"}
 
 
 @app.post("/api/demo/dependency-failure")
@@ -166,15 +176,23 @@ async def controlled_error() -> None:
 
 @app.get("/api/delay")
 async def controlled_delay(seconds: float = Query(default=5, ge=0, le=60)) -> dict[str, object]:
-    await asyncio.sleep(seconds)
+    _demo_stop_requested.clear()
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        if _demo_stop_requested.is_set():
+            raise HTTPException(status_code=409, detail="Demo scenario stopped")
+        await asyncio.sleep(min(0.1, max(0.0, deadline - time.perf_counter())))
     return {"message": "Delay completed", "seconds": seconds}
 
 
 @app.get("/api/cpu")
 async def controlled_cpu(seconds: float = Query(default=10, ge=0, le=60)) -> dict[str, object]:
+    _demo_stop_requested.clear()
     deadline = time.perf_counter() + seconds
     value = 0.0
     while time.perf_counter() < deadline:
+        if _demo_stop_requested.is_set():
+            raise HTTPException(status_code=409, detail="Demo scenario stopped")
         value = (value * 1.000001 + 1.0) % 1000000
     return {"message": "CPU workload completed", "seconds": seconds, "result": value}
 

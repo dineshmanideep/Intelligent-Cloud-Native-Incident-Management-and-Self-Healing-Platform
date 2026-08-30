@@ -114,8 +114,9 @@ curl http://$(minikube ip):30080/incidents/api/incidents
 ```
 
 The frontend also provides controlled scenarios for database pool exhaustion, database lock contention, and downstream retry
-storms. Use the **Cause** buttons, wait for the incident card to appear, click **Diagnose with telemetry + memory**, and then
-click **Resolve incident**. The next run retrieves the resolved incident and its solution from pgvector.
+storms. Use the **Cause** buttons, then click **Diagnose current incident** when you want to inspect the latest two minutes.
+The current active signal is queried at that moment; if several are active, choose one inline. Open the report, then
+**Resolve** it to save the solution. The next run retrieves relevant resolved memory.
 
 The same scenarios are available from the API:
 
