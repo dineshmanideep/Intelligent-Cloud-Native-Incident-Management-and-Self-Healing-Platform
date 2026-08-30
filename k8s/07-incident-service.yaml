@@ -24,6 +24,7 @@ data:
   INCIDENT_API_URL: http://incident-api.incident-platform.svc.cluster.local.:8000
   DETECTION_INTERVAL_SECONDS: "15"
   DIAGNOSIS_WINDOW_MINUTES: "2"
+  TREND_LOOKBACK_HOURS: "6"
   LLM_API_BASE_URL: ""
   LLM_MODEL: ""
   EMBEDDING_API_BASE_URL: ""

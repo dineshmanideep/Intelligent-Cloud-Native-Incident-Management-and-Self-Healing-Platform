@@ -92,10 +92,11 @@ Kubernetes monitoring URLs use absolute service DNS names with a trailing dot be
 - `backend/app/main.py`: scenario endpoints and dependency retries.
 - `backend/app/telemetry.py`: JSON logs and OpenTelemetry.
 - `backend/requirements.txt`: includes `psycopg[pool,binary]`.
-- `incident_service/app.py`: schema migration, detector, telemetry collection, diagnosis, retrieval, resolution APIs.
-- `incident_service/tests/test_incident_service.py`: embedding/rule/fallback tests.
+- `incident_service/app.py`: schema migration, detector, structured metric/trace evidence, diagnosis reports, retrieval, and resolution APIs.
+- `incident_service/tests/test_incident_service.py`: embedding, rule, fallback, metric-summary, and trend tests.
 - `frontend/index.html`: clean QuickCart application.
-- `frontend/operations.html`: scenario controls and incident diagnosis console at `/operations`.
+- `frontend/operations.html`: scenario controls, active/resolved lists, and diagnosis report history at `/operations`.
+- `frontend/diagnosis.html`: dedicated non-modal diagnosis workspace at `/operations/diagnosis`.
 - `frontend/nginx.conf`: `/incidents/` proxy.
 - `k8s/00-config.yaml`: pool settings.
 - `k8s/02-api.yaml`: API session affinity.
@@ -223,7 +224,7 @@ Kubernetes verification passed after restarting Minikube:
 - Lock contention caused `/api/items` to time out.
 - Reset restored `/api/items` successfully.
 - The detector created a `db_pool_exhaustion` incident.
-- Diagnose returned local fallback mode and a two-minute telemetry snapshot containing metrics, logs, pods, and trace fields.
+- Diagnose returned local fallback mode and a two-minute structured telemetry snapshot containing metric summaries, logs, pods, traces, dominant signal, trend, and fingerprint fields.
 - Diagnose returned similar incidents from pgvector.
 - Resolve stored the title and solution and marked the incident resolved.
 
