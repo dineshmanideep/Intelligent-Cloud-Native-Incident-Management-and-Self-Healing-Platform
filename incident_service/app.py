@@ -76,6 +76,7 @@ ALTER TABLE incidents ADD COLUMN IF NOT EXISTS canonical_fingerprint JSONB NOT N
 CREATE TABLE IF NOT EXISTS diagnosis_reports (
     id UUID PRIMARY KEY,
     incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
+    title TEXT NOT NULL DEFAULT 'Diagnosis report',
     status TEXT NOT NULL DEFAULT 'open',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -94,6 +95,7 @@ CREATE INDEX IF NOT EXISTS incidents_embedding_idx
     ON incidents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 1);
 ALTER TABLE incidents ALTER COLUMN embedding DROP NOT NULL;
 ALTER TABLE diagnosis_reports ALTER COLUMN incident_id DROP NOT NULL;
+ALTER TABLE diagnosis_reports ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT 'Diagnosis report';
 UPDATE incidents SET title = 'Unclassified incident candidate' WHERE title IS NULL;
 """
 
@@ -254,6 +256,8 @@ async def prometheus_range(query: str, start: datetime, end: datetime) -> dict[s
 
 
 def range_values(payload: dict[str, Any]) -> list[tuple[float, float]]:
+    if not isinstance(payload, dict):
+        return []
     values: list[tuple[float, float]] = []
     for series in payload.get("data", {}).get("result", []):
         for timestamp, value in series.get("values", []):
@@ -286,8 +290,8 @@ def normalized_metric(summary: dict[str, Any]) -> float:
     if mean is None:
         return 0.0
     if summary.get("comparison") == "<":
-        return min(1.0, threshold / max(float(mean), 0.000001))
-    return min(1.0, max(0.0, float(mean) / threshold))
+        return round(min(10.0, threshold / max(float(mean), 0.000001)), 6)
+    return round(min(10.0, max(0.0, float(mean) / threshold)), 6)
 
 
 def trend_classification(values: list[tuple[float, float]], threshold: float) -> tuple[str, float | None]:
@@ -327,7 +331,7 @@ async def trace_reference() -> str | None:
 
 
 def trace_summary(trace: dict[str, Any], failed: bool = False) -> dict[str, Any]:
-    spans = trace.get("spans", [])
+    spans = trace.get("spans") or []
     def duration(span: dict[str, Any]) -> float:
         try:
             return float(span.get("duration") or 0)
@@ -345,6 +349,77 @@ def trace_summary(trace: dict[str, Any], failed: bool = False) -> dict[str, Any]
         "span_service": process.get("serviceName"),
         "span_operation": bottleneck.get("operationName"),
         "pct_of_total_duration": round(duration(bottleneck) / total * 100, 2),
+    }
+
+
+def duration_bucket(duration_ms: float) -> str:
+    if duration_ms < 100:
+        return "lt_100ms"
+    if duration_ms < 500:
+        return "100_500ms"
+    if duration_ms < 1000:
+        return "500ms_1s"
+    if duration_ms < 5000:
+        return "1_5s"
+    return "gte_5s"
+
+
+def log_categories(lines: list[str]) -> list[str]:
+    """Return stable evidence labels; never fingerprint raw log text."""
+    categories: set[str] = set()
+    for line in lines:
+        text = str(line).lower()
+        if any(word in text for word in ("timeout", "timed out", "deadline")):
+            categories.add("timeout")
+        if any(word in text for word in ("connection refused", "connection reset", "connecterror")):
+            categories.add("connection_error")
+        if any(word in text for word in ("500", "502", "503", "504", "internal server error")):
+            categories.add("http_5xx")
+        if any(word in text for word in ("traceback", "exception", "error")):
+            categories.add("application_error")
+        if any(word in text for word in ("database", "postgres", "pool", "lock")):
+            categories.add("database")
+    return sorted(categories)
+
+
+def pod_categories(pods: list[dict[str, Any]]) -> list[str]:
+    categories: set[str] = set()
+    for pod in pods:
+        if pod.get("error"):
+            categories.add("unavailable")
+            continue
+        phase = str(pod.get("phase") or "unknown").lower()
+        if phase != "running":
+            categories.add(f"pod_{phase}")
+        try:
+            restarts = int(pod.get("restarts") or 0)
+        except (TypeError, ValueError):
+            restarts = 0
+        if restarts:
+            categories.add("restarts_1_2" if restarts < 3 else "restarts_3_plus")
+    return sorted(categories)
+
+
+def trace_fingerprint(trace_items: list[dict[str, Any]]) -> dict[str, Any]:
+    durations = []
+    for item in trace_items:
+        try:
+            durations.append(float(item.get("duration_ms") or 0))
+        except (TypeError, ValueError):
+            durations.append(0.0)
+    services = sorted({item.get("span_service") for item in trace_items if item.get("span_service")})
+    operations = sorted({item.get("span_operation") for item in trace_items if item.get("span_operation")})
+    failed_count = sum(1 for item in trace_items if item.get("failed"))
+    max_duration = max(durations, default=0.0)
+    return {
+        "count": len(trace_items),
+        "failed_count": failed_count,
+        "slow_count": sum(1 for duration in durations if duration >= 1000),
+        "max_duration_ms": round(max_duration, 2),
+        "max_duration_bucket": duration_bucket(max_duration) if trace_items else None,
+        "failed_or_slow": bool(trace_items),
+        "services": services,
+        "operations": operations,
     }
 
 
@@ -415,11 +490,9 @@ async def diagnosis_telemetry() -> dict[str, Any]:
         "breached_signals": sorted(item["rule"] for item in breached),
         "metrics": {name: {"mean": item["mean"], "threshold": item["threshold"], "normalized": round(normalized_metric(item), 4), "status": item["status"]} for name, item in metrics.items()},
         "bottleneck": {key: bottleneck.get(key) for key in ("span_service", "span_operation", "pct_of_total_duration") if bottleneck.get(key) is not None},
-        "trace_evidence": {
-            "count": len(trace_items),
-            "failed_count": sum(1 for item in trace_items if item.get("failed")),
-            "max_duration_ms": max((float(item.get("duration_ms", 0)) for item in trace_items), default=0.0),
-        },
+        "trace_evidence": trace_fingerprint(trace_items),
+        "log_categories": log_categories(logs),
+        "pod_categories": pod_categories(pods),
         "trend": trend,
         "slope": slope,
         "observation_count": 1,
@@ -546,12 +619,77 @@ async def similar_incidents(incident_id: str, fingerprint: dict[str, Any] | None
     return await find_similar(fingerprint or incident.get("canonical_fingerprint") or {}, limit=limit, exclude_id=incident_id)
 
 
+def _breaches(fingerprint: dict[str, Any]) -> set[str]:
+    explicit = {str(value) for value in fingerprint.get("breached_signals", []) if value}
+    if explicit:
+        return explicit
+    return {
+        str(name) for name, value in (fingerprint.get("metrics") or {}).items()
+        if isinstance(value, dict) and value.get("status") == "BREACHED"
+    }
+
+
+def _set_similarity(left: Any, right: Any) -> float | None:
+    a, b = set(left or []), set(right or [])
+    if not a or not b:
+        return None
+    return len(a & b) / len(a | b)
+
+
+def fingerprint_similarity(live: dict[str, Any], historical: dict[str, Any]) -> tuple[float, str] | None:
+    live_breaches, old_breaches = _breaches(live), _breaches(historical)
+    # Healthy/no-data snapshots and historical rows without a real breach are never incidents.
+    if not live_breaches or not old_breaches or not (live_breaches & old_breaches):
+        return None
+    if live.get("dominant_signal") and historical.get("dominant_signal") and live["dominant_signal"] != historical["dominant_signal"]:
+        return None
+
+    live_metrics, old_metrics = live.get("metrics") or {}, historical.get("metrics") or {}
+    shared = live_breaches & old_breaches
+    signal_score = len(shared) / len(live_breaches | old_breaches)
+    distances = []
+    for name in shared:
+        left = float((live_metrics.get(name) or {}).get("normalized") or 0)
+        right = float((old_metrics.get(name) or {}).get("normalized") or 0)
+        distances.append(min(abs(left - right) / max(max(left, right), 1.0), 1.0))
+    metric_score = signal_score * (1.0 - sum(distances) / len(distances))
+    components = [(0.45, metric_score)]
+
+    live_trace, old_trace = live.get("trace_evidence") or {}, historical.get("trace_evidence") or {}
+    if live_trace.get("failed_or_slow") and old_trace.get("failed_or_slow"):
+        trace_scores = [
+            1.0 if bool(live_trace.get("failed_count")) == bool(old_trace.get("failed_count")) else 0.0,
+            1.0 if live_trace.get("max_duration_bucket") == old_trace.get("max_duration_bucket") else 0.0,
+        ]
+        service_score = _set_similarity(live_trace.get("services"), old_trace.get("services"))
+        operation_score = _set_similarity(live_trace.get("operations"), old_trace.get("operations"))
+        if service_score is not None:
+            trace_scores.append(service_score)
+        if operation_score is not None:
+            trace_scores.append(operation_score)
+        components.append((0.35, sum(trace_scores) / len(trace_scores)))
+
+    for weight, key in ((0.10, "log_categories"), (0.10, "pod_categories")):
+        score = _set_similarity(live.get(key), historical.get(key))
+        if score is not None:
+            components.append((weight, score))
+
+    score = sum(weight * value for weight, value in components) / sum(weight for weight, _ in components)
+    both_trace = live_trace.get("failed_or_slow") and old_trace.get("failed_or_slow")
+    same_bottleneck = (
+        live.get("bottleneck", {}).get("span_service") == historical.get("bottleneck", {}).get("span_service")
+        and live.get("bottleneck", {}).get("span_operation") == historical.get("bottleneck", {}).get("span_operation")
+        and live.get("bottleneck", {}).get("span_service") is not None
+    )
+    if both_trace and not same_bottleneck:
+        score = min(score, 0.69)
+    tier = "strong_match" if score >= 0.80 and (not both_trace or same_bottleneck) else "partial_match"
+    return round(min(score, 1.0), 4), tier
+
+
 async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: str | None = None) -> list[dict[str, Any]]:
-    dominant = fingerprint.get("dominant_signal")
-    if not dominant:
+    if not _breaches(fingerprint):
         return []
-    live_metrics = fingerprint.get("metrics", {})
-    live_breaches = set(fingerprint.get("breached_signals", []))
     try:
         with db_connect() as connection:
             with connection.cursor() as cursor:
@@ -560,9 +698,6 @@ async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: 
                 if exclude_id:
                     clauses.append("id <> %s")
                     params.append(exclude_id)
-                if dominant:
-                    clauses.append("canonical_fingerprint->>'dominant_signal' = %s")
-                    params.append(dominant)
                 params.append(min(limit * 4, 40))
                 cursor.execute(f"SELECT id, title, scenario, workload, rule, severity, status, diagnosis, resolution_outcome, canonical_fingerprint FROM incidents WHERE {' AND '.join(clauses)} ORDER BY resolved_at DESC LIMIT %s", tuple(params))
                 keys = ("id", "title", "scenario", "workload", "rule", "severity", "status", "diagnosis", "resolution_outcome", "canonical_fingerprint")
@@ -577,26 +712,10 @@ async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: 
                             continue
                     if not isinstance(historical, dict):
                         continue
-                    historical_metrics = historical.get("metrics", {})
-                    historical_breaches = set(historical.get("breached_signals", []))
-                    if not historical_breaches:
-                        historical_breaches = {name for name, value in historical_metrics.items() if value.get("status") == "BREACHED" or (value.get("status") is None and float(value.get("normalized", 0)) >= 1.0)}
-                    if dominant not in historical_breaches or not (live_breaches & historical_breaches):
+                    similarity = fingerprint_similarity(fingerprint, historical)
+                    if similarity is None:
                         continue
-                    signal_score = len(live_breaches & historical_breaches) / len(live_breaches | historical_breaches)
-                    shared = live_breaches & historical_breaches
-                    metric_score = 1.0 - sum(abs(float(live_metrics[name].get("normalized", 0)) - float(historical_metrics.get(name, {}).get("normalized", 0))) for name in shared) / len(shared)
-                    score = 0.7 * signal_score + 0.3 * max(0.0, metric_score)
-                    live_bottleneck = fingerprint.get("bottleneck", {})
-                    old_bottleneck = historical.get("bottleneck", {})
-                    same_bottleneck = bool(live_bottleneck and old_bottleneck and live_bottleneck.get("span_service") == old_bottleneck.get("span_service") and live_bottleneck.get("span_operation") == old_bottleneck.get("span_operation"))
-                    live_trace = fingerprint.get("trace_evidence", {})
-                    old_trace = historical.get("trace_evidence", {})
-                    if live_trace and old_trace:
-                        duration_delta = abs(float(live_trace.get("max_duration_ms", 0)) - float(old_trace.get("max_duration_ms", 0))) / max(float(old_trace.get("max_duration_ms", 0)), 1.0)
-                        score *= max(0.0, 1.0 - min(1.0, duration_delta * 0.25))
-                    match["similarity_score"] = round(max(0.0, min(1.0, score)), 4)
-                    match["match_tier"] = "strong_match" if same_bottleneck else "partial_match"
+                    match["similarity_score"], match["match_tier"] = similarity
                     match["observation_count"] = historical.get("observation_count", 1)
                     matches.append(match)
                 matches.sort(key=lambda item: item["similarity_score"], reverse=True)
@@ -608,20 +727,44 @@ async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: 
 
 @app.post("/api/diagnose")
 async def diagnose_current() -> dict[str, str]:
-    telemetry = await diagnosis_telemetry()
+    try:
+        telemetry = await diagnosis_telemetry()
+    except Exception as error:
+        # A broken optional telemetry adapter must not prevent an evidence report.
+        logger.exception("diagnosis telemetry collection failed; returning no-data report")
+        telemetry = {
+            "window_start": (now() - timedelta(minutes=DIAGNOSIS_WINDOW_MINUTES)).isoformat(),
+            "window_end": now().isoformat(),
+            "metrics": {rule.name: metric_summary(rule, {}) for rule in RULES},
+            "traces": [], "dominant_signal": None, "trend": "unavailable",
+            "fingerprint": {"workload": "incident-api", "dominant_signal": None, "breached_signals": [], "metrics": {rule.name: {"mean": None, "threshold": rule.threshold, "normalized": 0.0, "status": "NO_DATA"} for rule in RULES}, "trace_evidence": {}, "bottleneck": {}, "log_categories": [], "pod_categories": []},
+            "pods": [], "logs": [], "trace_reference": None,
+        }
     fingerprint = telemetry["fingerprint"]
     similar = await find_similar(fingerprint)
     diagnosis = await llm_diagnosis({"workload": "incident-api", "rule": telemetry.get("dominant_signal") or "none", "symptoms": {}}, similar, {key: value for key, value in telemetry.items() if key not in {"raw_metrics", "raw_trend"}})
     report_id = str(uuid.uuid4())
     public_telemetry = {key: value for key, value in telemetry.items() if key not in {"raw_metrics", "raw_trend"}}
-    with db_connect() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("INSERT INTO diagnosis_reports (id, incident_id, window_start, window_end, fingerprint, summary, evidence, diagnosis, similar_incidents) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s)", (report_id, telemetry["window_start"], telemetry["window_end"], json.dumps(fingerprint, default=str), json.dumps(public_telemetry, default=str), json.dumps(public_telemetry, default=str), json.dumps(diagnosis, default=str), json.dumps(similar, default=str)))
+    insert_error = None
+    for attempt in range(2):
+        try:
+            with db_connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("INSERT INTO diagnosis_reports (id, incident_id, title, window_start, window_end, fingerprint, summary, evidence, diagnosis, similar_incidents) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s)", (report_id, "Diagnosis report", telemetry["window_start"], telemetry["window_end"], json.dumps(fingerprint, default=str), json.dumps(public_telemetry, default=str), json.dumps(public_telemetry, default=str), json.dumps(diagnosis, default=str), json.dumps(similar, default=str)))
+            insert_error = None
+            break
+        except Exception as error:
+            insert_error = error
+            if attempt == 0:
+                await asyncio.sleep(0.15)
+    if insert_error:
+        logger.exception("diagnosis report persistence failed")
+        raise HTTPException(status_code=503, detail="Diagnosis storage is temporarily unavailable") from insert_error
     return {"report_id": report_id}
 
 
 def report_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
-    keys = ("id", "incident_id", "status", "created_at", "updated_at", "window_start", "window_end", "fingerprint", "summary", "evidence", "diagnosis", "similar_incidents")
+    keys = ("id", "incident_id", "title", "status", "created_at", "updated_at", "window_start", "window_end", "fingerprint", "summary", "evidence", "diagnosis", "similar_incidents")
     return dict(zip(keys, row))
 
 
@@ -629,7 +772,7 @@ def report_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
 async def list_diagnosis_reports() -> list[dict[str, Any]]:
     with db_connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, incident_id, status, created_at, updated_at, window_start, window_end, fingerprint, summary, evidence, diagnosis, similar_incidents FROM diagnosis_reports ORDER BY created_at DESC")
+            cursor.execute("SELECT id, incident_id, COALESCE(title, 'Diagnosis report'), status, created_at, updated_at, window_start, window_end, fingerprint, summary, evidence, diagnosis, similar_incidents FROM diagnosis_reports ORDER BY created_at DESC")
             return [report_from_row(row) for row in cursor.fetchall()]
 
 
@@ -637,11 +780,42 @@ async def list_diagnosis_reports() -> list[dict[str, Any]]:
 async def get_diagnosis_report(report_id: str) -> dict[str, Any]:
     with db_connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, incident_id, status, created_at, updated_at, window_start, window_end, fingerprint, summary, evidence, diagnosis, similar_incidents FROM diagnosis_reports WHERE id=%s", (report_id,))
+            cursor.execute("SELECT id, incident_id, COALESCE(title, 'Diagnosis report'), status, created_at, updated_at, window_start, window_end, fingerprint, summary, evidence, diagnosis, similar_incidents FROM diagnosis_reports WHERE id=%s", (report_id,))
             row = cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Diagnosis report not found")
     return report_from_row(row)
+
+
+class ReportUpdate(BaseModel):
+    title: str
+
+
+@app.patch("/api/diagnosis-reports/{report_id}")
+async def update_diagnosis_report(report_id: str, request: ReportUpdate) -> dict[str, Any]:
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    with db_connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE diagnosis_reports SET title=%s, updated_at=now() WHERE id=%s RETURNING id",
+                (title[:200], report_id),
+            )
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Diagnosis report not found")
+    return await get_diagnosis_report(report_id)
+
+
+@app.delete("/api/diagnosis-reports/{report_id}")
+async def delete_diagnosis_report(report_id: str) -> dict[str, str]:
+    # The FK is intentionally retained/set NULL: deleting a report must never delete resolved memory.
+    with db_connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM diagnosis_reports WHERE id=%s RETURNING id", (report_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Diagnosis report not found")
+    return {"id": report_id, "status": "deleted"}
 
 
 @app.post("/api/diagnosis-reports/{report_id}/cancel")
