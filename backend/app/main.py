@@ -37,8 +37,15 @@ REQUEST_LATENCY = Histogram(
 )
 DEMO_DEPENDENCY_RETRIES = Counter("demo_dependency_retries_total", "Retries performed by the dependency demo")
 DEMO_DEPENDENCY_FAILURE = Gauge("demo_dependency_failure_active", "Whether the dependency failure demo is active")
+DEMO_MEMORY_PRESSURE = Gauge("demo_memory_pressure_active", "Whether the bounded memory-pressure demo is active")
+DEMO_MEMORY_PRESSURE_BYTES = Gauge("demo_memory_pressure_bytes", "Bytes held by the bounded memory-pressure demo")
+DEMO_MEMORY_PRESSURE_LIMIT = Gauge("demo_memory_pressure_limit_bytes", "Safe allocation limit for the memory-pressure demo")
 _dependency_failure_active = False
+_latency_demo_active = False
+_memory_pressure: bytearray | None = None
+_MEMORY_PRESSURE_LIMIT = 64 * 1024 * 1024
 _demo_stop_requested = threading.Event()
+DEMO_MEMORY_PRESSURE_LIMIT.set(_MEMORY_PRESSURE_LIMIT)
 
 
 @asynccontextmanager
@@ -123,10 +130,14 @@ async def demo_db_lock_start() -> dict[str, str]:
 
 @app.post("/api/demo/reset")
 async def demo_reset() -> dict[str, str]:
-    global _dependency_failure_active
+    global _dependency_failure_active, _latency_demo_active, _memory_pressure
     _dependency_failure_active = False
+    _latency_demo_active = False
+    _memory_pressure = None
     _demo_stop_requested.set()
     DEMO_DEPENDENCY_FAILURE.set(0)
+    DEMO_MEMORY_PRESSURE.set(0)
+    DEMO_MEMORY_PRESSURE_BYTES.set(0)
     await asyncio.to_thread(reset_demo_state)
     logger.info("demo scenarios reset")
     return {"status": "reset"}
@@ -137,6 +148,27 @@ async def demo_stop() -> dict[str, str]:
     """Stop persistent and cancellable demo activity without touching incidents or memory."""
     await demo_reset()
     return {"status": "stopped"}
+
+
+@app.post("/api/demo/memory/start")
+async def demo_memory_start() -> dict[str, object]:
+    global _memory_pressure
+    _demo_stop_requested.clear()
+    _memory_pressure = bytearray(_MEMORY_PRESSURE_LIMIT)
+    _memory_pressure[:] = b"\x01" * _MEMORY_PRESSURE_LIMIT
+    DEMO_MEMORY_PRESSURE.set(1)
+    DEMO_MEMORY_PRESSURE_BYTES.set(_MEMORY_PRESSURE_LIMIT)
+    logger.warning("demo scenario=memory_pressure state=active bytes=%s", _MEMORY_PRESSURE_LIMIT)
+    return {"scenario": "memory_pressure", "status": "active", "allocated_mb": _MEMORY_PRESSURE_LIMIT // (1024 * 1024)}
+
+
+@app.post("/api/demo/latency/start")
+async def demo_latency_start() -> dict[str, str]:
+    global _latency_demo_active
+    _demo_stop_requested.clear()
+    _latency_demo_active = True
+    logger.warning("demo scenario=latency_degradation state=active")
+    return {"scenario": "latency_degradation", "status": "active"}
 
 
 @app.post("/api/demo/dependency-failure")
@@ -157,6 +189,14 @@ async def demo_downstream() -> dict[str, str]:
             await asyncio.sleep(0.25)
         raise HTTPException(status_code=504, detail="Controlled downstream timeout")
     return {"dependency": "ok"}
+
+
+@app.get("/api/demo/latency")
+async def demo_latency() -> dict[str, object]:
+    if _latency_demo_active:
+        await asyncio.sleep(2)
+        return {"status": "degraded", "duration_seconds": 2}
+    return {"status": "normal", "duration_seconds": 0}
 
 
 @app.get("/api/items")

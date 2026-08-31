@@ -12,6 +12,7 @@ def test_rules_include_distinct_controlled_scenarios() -> None:
     names = {rule.name for rule in RULES}
     assert {"db_pool_exhaustion", "db_lock_contention", "dependency_retry_storm"} <= names
     assert "/ clamp_min" in next(rule.query for rule in RULES if rule.name == "error_rate")
+    assert "demo_memory_pressure_bytes" in next(rule.query for rule in RULES if rule.name == "high_memory")
 
 
 def test_fallback_diagnosis_reports_signal_without_root_cause() -> None:

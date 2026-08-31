@@ -119,7 +119,7 @@ RULES = (
     ),
     Rule(
         "high_memory",
-        'sum(container_memory_working_set_bytes{pod=~"incident-api-.*",container!="",container!="POD"}) / clamp_min(sum(container_spec_memory_limit_bytes{pod=~"incident-api-.*",container!="",container!="POD"}), 1)',
+        'max(demo_memory_pressure_bytes / clamp_min(demo_memory_pressure_limit_bytes, 1))',
         0.80,
         ">",
         "high",
@@ -412,7 +412,8 @@ async def diagnosis_telemetry() -> dict[str, Any]:
     fingerprint = {
         "workload": "incident-api",
         "dominant_signal": dominant,
-        "metrics": {name: {"mean": item["mean"], "threshold": item["threshold"], "normalized": normalized_metric(item)} for name, item in metrics.items()},
+        "breached_signals": sorted(item["rule"] for item in breached),
+        "metrics": {name: {"mean": item["mean"], "threshold": item["threshold"], "normalized": round(normalized_metric(item), 4), "status": item["status"]} for name, item in metrics.items()},
         "bottleneck": {key: bottleneck.get(key) for key in ("span_service", "span_operation", "pct_of_total_duration") if bottleneck.get(key) is not None},
         "trace_evidence": {
             "count": len(trace_items),
@@ -547,7 +548,10 @@ async def similar_incidents(incident_id: str, fingerprint: dict[str, Any] | None
 
 async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: str | None = None) -> list[dict[str, Any]]:
     dominant = fingerprint.get("dominant_signal")
+    if not dominant:
+        return []
     live_metrics = fingerprint.get("metrics", {})
+    live_breaches = set(fingerprint.get("breached_signals", []))
     try:
         with db_connect() as connection:
             with connection.cursor() as cursor:
@@ -574,8 +578,15 @@ async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: 
                     if not isinstance(historical, dict):
                         continue
                     historical_metrics = historical.get("metrics", {})
-                    shared = set(live_metrics) & set(historical_metrics)
-                    score = 0.0 if not shared else 1.0 - sum(abs(float(live_metrics[name].get("normalized", 0)) - float(historical_metrics[name].get("normalized", 0))) for name in shared) / len(shared)
+                    historical_breaches = set(historical.get("breached_signals", []))
+                    if not historical_breaches:
+                        historical_breaches = {name for name, value in historical_metrics.items() if value.get("status") == "BREACHED" or (value.get("status") is None and float(value.get("normalized", 0)) >= 1.0)}
+                    if dominant not in historical_breaches or not (live_breaches & historical_breaches):
+                        continue
+                    signal_score = len(live_breaches & historical_breaches) / len(live_breaches | historical_breaches)
+                    shared = live_breaches & historical_breaches
+                    metric_score = 1.0 - sum(abs(float(live_metrics[name].get("normalized", 0)) - float(historical_metrics.get(name, {}).get("normalized", 0))) for name in shared) / len(shared)
+                    score = 0.7 * signal_score + 0.3 * max(0.0, metric_score)
                     live_bottleneck = fingerprint.get("bottleneck", {})
                     old_bottleneck = historical.get("bottleneck", {})
                     same_bottleneck = bool(live_bottleneck and old_bottleneck and live_bottleneck.get("span_service") == old_bottleneck.get("span_service") and live_bottleneck.get("span_operation") == old_bottleneck.get("span_operation"))
@@ -589,7 +600,7 @@ async def find_similar(fingerprint: dict[str, Any], limit: int = 5, exclude_id: 
                     match["observation_count"] = historical.get("observation_count", 1)
                     matches.append(match)
                 matches.sort(key=lambda item: item["similarity_score"], reverse=True)
-                return [match for match in matches if match["similarity_score"] >= 0.55][:limit]
+                return [match for match in matches if match["similarity_score"] >= 0.70][:limit]
     except Exception as error:
         logger.warning("resolved memory lookup failed; continuing without matches: %s", error)
         return []
